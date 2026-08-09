@@ -59,3 +59,17 @@ def test_live_coingecko_requires_a_key(tmp_path: Path, monkeypatch) -> None:
 
     with pytest.raises(ProviderConfigurationError):
         CoinGeckoClient.from_settings(settings)
+
+
+def test_trending_coin_parser_preserves_search_and_market_rank() -> None:
+    observed_at = datetime(2026, 8, 9, tzinfo=UTC)
+
+    item = CoinGeckoClient._parse_trending(
+        {"id": "new-token", "symbol": "new", "name": "New Token", "market_cap_rank": 412},
+        observed_at,
+        3,
+    )
+
+    assert item.asset_id == "new-token"
+    assert item.search_rank == 3
+    assert item.market_cap_rank == 412

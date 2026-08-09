@@ -34,6 +34,7 @@ def load_fixture_bundle() -> MarketDataBundle:
         assets=assets,
         categories=categories,
         protocols=protocols,
+        trending_assets=[],
         payloads=[
             ProviderBatch(
                 provider="fixture",

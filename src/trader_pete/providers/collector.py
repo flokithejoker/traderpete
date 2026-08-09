@@ -13,7 +13,7 @@ def collect_market_data(settings: Settings, mode: RunMode) -> MarketDataBundle:
 
     coin_gecko = CoinGeckoClient.from_settings(settings)
     defi_llama = DefiLlamaClient()
-    assets, categories, cg_payloads, cg_observed_at = coin_gecko.collect()
+    assets, categories, trending_assets, cg_payloads, cg_observed_at = coin_gecko.collect()
     protocols, dl_payloads, dl_observed_at = defi_llama.collect()
     observed_at = min(cg_observed_at, dl_observed_at)
     return MarketDataBundle(
@@ -21,5 +21,6 @@ def collect_market_data(settings: Settings, mode: RunMode) -> MarketDataBundle:
         assets=assets,
         categories=categories,
         protocols=protocols,
+        trending_assets=trending_assets,
         payloads=[*cg_payloads, *dl_payloads],
     )

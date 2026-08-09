@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -25,10 +25,11 @@ class Settings:
     model: str
     reasoning_effort: str
     max_narratives: int
+    candidate_narratives: int
     currency: str
-    openai_api_key: str | None
-    coingecko_demo_api_key: str | None
-    coingecko_pro_api_key: str | None
+    openai_api_key: str | None = field(repr=False)
+    coingecko_demo_api_key: str | None = field(repr=False)
+    coingecko_pro_api_key: str | None = field(repr=False)
 
     @classmethod
     def from_env(cls, root_dir: Path | None = None) -> Settings:
@@ -43,6 +44,7 @@ class Settings:
             model=os.getenv("TRADER_PETE_MODEL", "gpt-5.6-sol"),
             reasoning_effort=os.getenv("TRADER_PETE_REASONING_EFFORT", "medium"),
             max_narratives=int(os.getenv("TRADER_PETE_MAX_NARRATIVES", "3")),
+            candidate_narratives=int(os.getenv("TRADER_PETE_CANDIDATE_NARRATIVES", "6")),
             currency=os.getenv("TRADER_PETE_CURRENCY", "usd").lower(),
             openai_api_key=os.getenv("OPENAI_API_KEY") or None,
             coingecko_demo_api_key=os.getenv("COINGECKO_DEMO_API_KEY") or None,
@@ -57,6 +59,7 @@ class Settings:
             "model": self.model,
             "reasoning_effort": self.reasoning_effort,
             "max_narratives": self.max_narratives,
+            "candidate_narratives": self.candidate_narratives,
             "currency": self.currency,
             "has_openai_key": bool(self.openai_api_key),
             "has_coingecko_key": bool(self.coingecko_demo_api_key or self.coingecko_pro_api_key),

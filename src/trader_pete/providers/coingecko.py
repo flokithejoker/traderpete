@@ -8,7 +8,13 @@ from typing import Any
 import httpx
 
 from trader_pete.config import Settings
-from trader_pete.models import CategoryMarket, MarketAsset, ProviderBatch, utc_now
+from trader_pete.models import (
+    CategoryMarket,
+    MarketAsset,
+    ProviderBatch,
+    TrendingAsset,
+    utc_now,
+)
 
 
 class ProviderConfigurationError(RuntimeError):
@@ -51,15 +57,28 @@ class CoinGeckoClient:
                     return response.json()
             except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError) as error:
                 last_error = error
-                if isinstance(error, httpx.HTTPStatusError) and error.response.status_code < 500:
-                    break
+                retry_after = 0.0
+                if isinstance(error, httpx.HTTPStatusError):
+                    status = error.response.status_code
+                    if status not in {408, 429} and status < 500:
+                        break
+                    try:
+                        retry_after = float(error.response.headers.get("retry-after", "0"))
+                    except ValueError:
+                        retry_after = 0.0
                 if attempt < 2:
-                    time.sleep(2**attempt)
+                    time.sleep(min(10, max(retry_after, 2**attempt)))
         raise RuntimeError(f"CoinGecko request failed for {endpoint}: {last_error}") from last_error
 
     def collect(
         self,
-    ) -> tuple[list[MarketAsset], list[CategoryMarket], list[ProviderBatch], datetime]:
+    ) -> tuple[
+        list[MarketAsset],
+        list[CategoryMarket],
+        list[TrendingAsset],
+        list[ProviderBatch],
+        datetime,
+    ]:
         observed_at = utc_now()
         markets_payload = self._get(
             "/coins/markets",
@@ -73,13 +92,37 @@ class CoinGeckoClient:
             },
         )
         categories_payload = self._get("/coins/categories", {"order": "market_cap_desc"})
+        trending_payload = self._get("/search/trending", {})
 
         assets = [self._parse_asset(item, observed_at) for item in markets_payload]
+        trending_assets = [
+            self._parse_trending(item["item"], observed_at, rank)
+            for rank, item in enumerate(trending_payload.get("coins", []), start=1)
+        ]
+        known_ids = {asset.asset_id for asset in assets}
+        missing_trending_ids = [
+            item.asset_id for item in trending_assets if item.asset_id not in known_ids
+        ]
+        trending_markets_payload: list[dict[str, Any]] = []
+        if missing_trending_ids:
+            trending_markets_payload = self._get(
+                "/coins/markets",
+                {
+                    "vs_currency": "usd",
+                    "ids": ",".join(missing_trending_ids),
+                    "order": "market_cap_desc",
+                    "per_page": min(250, len(missing_trending_ids)),
+                    "page": 1,
+                    "sparkline": "false",
+                    "price_change_percentage": "24h,7d,30d",
+                },
+            )
+            assets.extend(self._parse_asset(item, observed_at) for item in trending_markets_payload)
         categories = [self._parse_category(item, observed_at) for item in categories_payload]
         payloads = [
             ProviderBatch(
                 provider="coingecko",
-                endpoint="/coins/markets",
+                endpoint="/coins/markets?universe=top250",
                 observed_at=observed_at,
                 payload=markets_payload,
             ),
@@ -89,8 +132,23 @@ class CoinGeckoClient:
                 observed_at=observed_at,
                 payload=categories_payload,
             ),
+            ProviderBatch(
+                provider="coingecko",
+                endpoint="/search/trending",
+                observed_at=observed_at,
+                payload=trending_payload,
+            ),
         ]
-        return assets, categories, payloads, observed_at
+        if trending_markets_payload:
+            payloads.append(
+                ProviderBatch(
+                    provider="coingecko",
+                    endpoint="/coins/markets?universe=trending",
+                    observed_at=observed_at,
+                    payload=trending_markets_payload,
+                )
+            )
+        return assets, categories, trending_assets, payloads, observed_at
 
     @staticmethod
     def _parse_asset(item: dict[str, Any], observed_at: datetime) -> MarketAsset:
@@ -98,7 +156,7 @@ class CoinGeckoClient:
             asset_id=item["id"],
             symbol=item["symbol"].upper(),
             name=item["name"],
-            observed_at=observed_at,
+            observed_at=_timestamp(item.get("last_updated"), observed_at),
             price_usd=item.get("current_price"),
             market_cap_usd=item.get("market_cap"),
             volume_24h_usd=item.get("total_volume"),
@@ -113,8 +171,29 @@ class CoinGeckoClient:
         return CategoryMarket(
             category_id=item["id"],
             name=item["name"],
-            observed_at=observed_at,
+            observed_at=_timestamp(item.get("updated_at"), observed_at),
             market_cap_usd=item.get("market_cap"),
             volume_24h_usd=item.get("volume_24h"),
             change_24h_pct=item.get("market_cap_change_24h"),
+            top_asset_ids=item.get("top_3_coins_id") or [],
         )
+
+    @staticmethod
+    def _parse_trending(item: dict[str, Any], observed_at: datetime, rank: int) -> TrendingAsset:
+        return TrendingAsset(
+            asset_id=item["id"],
+            symbol=item["symbol"].upper(),
+            name=item["name"],
+            observed_at=observed_at,
+            search_rank=rank,
+            market_cap_rank=item.get("market_cap_rank"),
+        )
+
+
+def _timestamp(value: object, fallback: datetime) -> datetime:
+    if not isinstance(value, str) or not value:
+        return fallback
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return fallback

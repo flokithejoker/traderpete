@@ -18,27 +18,34 @@ from trader_pete.models import (
     NarrativeSignals,
 )
 
-PROMPT_VERSION = "narrative-discovery-v1"
+PROMPT_VERSION = "narrative-discovery-v2"
 
-SYSTEM_INSTRUCTIONS = """You are Trader Pete's narrative research component.
-Identify at most the requested number of crypto narratives that could matter over the next
-28 days.
+SYSTEM_INSTRUCTIONS = """You are Trader Pete's candidate narrative research component.
+Discover a broad radar of crypto themes that could matter over the next 28 days. Do not simply
+repeat the largest categories. Search independently through three lanes: (1) newly verified events
+and scheduled catalysts, (2) related assets beginning to accelerate together, and (3) accelerating
+protocol usage. A one- or two-project idea is a theme seed, not a proven narrative.
 
-Treat attention as reflexive evidence, never as proof of future returns. Prefer new acceleration
-over absolute popularity. Confirm narratives using multiple independent dimensions: a credible
-catalyst, market breadth and relative strength, protocol adoption, and investable constituents.
-Penalize already-crowded, repetitive, promotional, or circular evidence.
+Treat attention as reflexive evidence, never as proof of future returns. CoinGecko trending is
+search popularity, not organic sentiment. Do not claim to detect AI-written news or bots. Instead,
+trace each claim to its earliest root source, collapse syndication to that root, identify the
+publisher, and look for independent corroboration and contradictions. A social post or aggregator
+may discover a lead but cannot verify one. Prefer protocol documentation, governance proposals,
+regulatory filings, repository releases, on-chain records, verified company announcements, and
+reputable original reporting.
 
-Research the last seven days and upcoming 28 days with web search. Prefer primary sources,
-official protocol material, filings, governance proposals, and reputable data providers. Use news
-only for genuinely new events. Give both supporting and contradicting evidence. Do not invent
-dates, metrics, sources, projects, or token relationships.
+Research concrete events from the last seven days plus dated catalysts in the next 28 days. Older
+sources may provide context but are not new evidence. Each source must state the atomic claim it
+supports, publisher, whether it is primary, and the root URL from which repetitions derive. Do not
+invent dates, metrics, sources, projects, or token relationships.
 
-Signal values are 0-100 assessments. Market confirmation, breadth, and fundamentals must respect
-the supplied point-in-time data. Attention acceleration, novelty, catalysts, and crowding require
-web evidence. Confidence measures source quality, independence, recency, and completeness—not
-conviction. Only use supplied asset IDs for constituent_ids. Do not make trade recommendations or
-price targets.
+Only attention_acceleration, novelty, catalyst_strength, and crowding_risk are research judgments.
+Express each judgment on a 0-100 scale, never 0-1.
+Set attention_authenticity, market_confirmation, price_acceleration, breadth,
+fundamental_confirmation, evidence_quality, and concentration_risk to 0; deterministic code will
+replace them from the supplied snapshot and source provenance. Confidence describes the research
+packet's completeness, not return conviction. Use only supplied asset IDs and protocol IDs. Return
+no price targets, purchases, or trade recommendations.
 
 Return the requested structured object only."""
 
@@ -59,11 +66,12 @@ class ResearchOutput:
     response_id: str | None
 
 
-def _prompt(context: dict[str, object], max_narratives: int) -> str:
+def _prompt(context: dict[str, object], candidate_narratives: int) -> str:
     return (
         f"As of {context['observed_at']}, discover and assess no more than "
-        f"{max_narratives} narratives. The input below is a bounded normalized market snapshot; "
-        "it is not a list of conclusions.\n\n"
+        f"{candidate_narratives} candidate narratives or theme seeds. Keep no more than four "
+        "deduplicated root sources per candidate. The input below is a bounded, quality-screened "
+        "market snapshot; it is not a list of conclusions.\n\n"
         + json.dumps(context, sort_keys=True, separators=(",", ":"))
     )
 
@@ -75,7 +83,7 @@ class NarrativeResearcher:
 
     def research(self, bundle: MarketDataBundle, *, offline: bool) -> ResearchOutput:
         context = build_research_context(bundle)
-        prompt = _prompt(context, self.settings.max_narratives)
+        prompt = _prompt(context, self.settings.candidate_narratives)
         if offline:
             draft = self._offline_draft(bundle)
             response_id = None
@@ -84,8 +92,9 @@ class NarrativeResearcher:
 
         result = finalize_research(
             draft,
-            eligible_asset_ids={asset.asset_id for asset in bundle.assets},
-            max_narratives=self.settings.max_narratives,
+            bundle=bundle,
+            candidate_limit=self.settings.candidate_narratives,
+            shortlist_size=self.settings.max_narratives,
         )
         return ResearchOutput(
             result=result,
@@ -110,8 +119,8 @@ class NarrativeResearcher:
             instructions=SYSTEM_INSTRUCTIONS,
             text_format=DailyResearchDraft,
             store=False,
-            max_tool_calls=8,
-            max_output_tokens=8_000,
+            max_tool_calls=10,
+            max_output_tokens=10_000,
             text={"verbosity": "low"},
         )
         if response.output_parsed is None:
@@ -123,7 +132,6 @@ class NarrativeResearcher:
         definitions = json.loads(registry_path.read_text(encoding="utf-8"))
         assets = {item.asset_id: item for item in bundle.assets}
         categories = {item.category_id: item for item in bundle.categories}
-        protocols = {item.protocol_id: item for item in bundle.protocols}
         benchmark = assets.get("bitcoin")
         btc_7d = float(benchmark.change_7d_pct or 0) if benchmark else 0
         btc_30d = float(benchmark.change_30d_pct or 0) if benchmark else 0
@@ -134,51 +142,32 @@ class NarrativeResearcher:
             category_members = [
                 categories[item] for item in definition["category_ids"] if item in categories
             ]
-            protocol_members = [
-                protocols[item] for item in definition["protocol_ids"] if item in protocols
-            ]
-            rel_7d = [float(item.change_7d_pct or 0) - btc_7d for item in members]
             rel_30d = [float(item.change_30d_pct or 0) - btc_30d for item in members]
             category_24h = [float(item.change_24h_pct or 0) for item in category_members]
-            protocol_7d = [float(item.change_7d_pct or 0) for item in protocol_members]
-            protocol_30d = [float(item.change_30d_pct or 0) for item in protocol_members]
-
-            market_confirmation = _clamp(50 + 1.6 * _median(rel_7d) + 0.7 * _median(rel_30d))
-            breadth = (
-                round(sum(item > 0 for item in rel_7d) / len(rel_7d) * 100, 1) if rel_7d else 0
-            )
-            fundamental_confirmation = _clamp(
-                45 + 1.3 * _median(protocol_7d) + 0.4 * _median(protocol_30d)
-            )
             category_strength = _median(category_24h)
             signals = NarrativeSignals(
                 attention_acceleration=50,
                 novelty=45,
                 catalyst_strength=40,
-                market_confirmation=market_confirmation,
-                breadth=breadth,
-                fundamental_confirmation=fundamental_confirmation,
+                market_confirmation=0,
+                breadth=0,
+                fundamental_confirmation=0,
                 crowding_risk=_clamp(45 + max(0, _median(rel_30d)) + category_strength),
             )
             drafts.append(
                 NarrativeResearchDraft(
                     narrative_id=definition["id"],
                     name=definition["name"],
-                    summary=(
-                        "Offline quantitative seed; live narrative evidence has not been "
-                        "researched."
-                    ),
-                    confidence_score=40,
+                    summary="Offline quantitative seed; live event evidence was not researched.",
+                    confidence_score=35,
                     signals=signals,
-                    thesis=(
-                        "Relative market and protocol metrics warrant placing this narrative "
-                        "on the radar."
-                    ),
+                    thesis="Relative market data warrants placing this theme on the radar.",
                     counter_thesis=(
-                        "Fixture data cannot establish attention novelty, catalysts, or live "
+                        "Fixture data cannot establish attention novelty, catalysts, or current "
                         "investability."
                     ),
                     constituent_ids=definition["asset_ids"],
+                    protocol_ids=definition["protocol_ids"],
                     sources=[],
                 )
             )
@@ -190,10 +179,7 @@ class NarrativeResearcher:
             narratives=drafts,
             data_gaps=[
                 "Offline fixture: no web, attention, catalyst, or current-event evidence was used.",
-                (
-                    "Narrative scores are development fixtures and must not be treated as "
-                    "current research."
-                ),
+                "Narrative scores are development fixtures, not current research.",
             ],
         )
 
