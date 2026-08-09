@@ -21,6 +21,23 @@ class DashboardArtifact:
 
 
 def _prepare(data: dict[str, Any]) -> dict[str, Any]:
+    data["paper_policy"] = json.loads(data.pop("paper_policy_json", "{}"))
+    data["minimum_signal_days"] = int(data["paper_policy"].get("minimum_prospective_days", 0))
+    data["validation_target_days"] = int(
+        data["paper_policy"].get("strategy_validation_target_days", 30)
+    )
+    readiness = (data.get("paper_decision") or {}).get("readiness_state", "BLOCKED")
+    data["paper_readiness_label"] = {
+        "PROPOSAL_AWAITING_HUMAN": "APPROVAL NEEDED",
+        "SHADOW_CASE_READY": "SHADOW READY",
+        "WORTHY_CASE_MONITORING": "CASE FOUND",
+        "BUILDING_EARLY_EVIDENCE": "BUILDING CASE",
+        "BLOCKED_NONCANONICAL_RERUN": "DIAGNOSTIC",
+        "BLOCKED_OFFLINE_OBSERVATION": "OFFLINE",
+        "WAITING_FOR_TECHNICAL_ENTRY": "WAITING ENTRY",
+        "BLOCKED_INVESTABILITY": "EVIDENCE GAPS",
+        "NO_WORTHY_INVESTMENT_CASE": "NO CASE",
+    }.get(readiness, readiness.replace("_", " "))
     previous_narratives = {item["narrative_id"]: item for item in data.pop("previous_narratives")}
     previous_projects = {
         (item["narrative_id"], item["project_id"]): item for item in data.pop("previous_projects")
@@ -94,11 +111,55 @@ def _prepare(data: dict[str, Any]) -> dict[str, Any]:
     for item in data["paper_candidates"]:
         assessment = json.loads(item.pop("assessment_json"))
         item.update(assessment)
+        item.setdefault("case_stage", "developing")
+        item.setdefault("case_score", 0)
+        item.setdefault("case_coverage_pct", 0)
+        item.setdefault("case_summary", "No structured investment case was recorded.")
+        item.setdefault("case_components", {})
+        item.setdefault("case_strengths", [])
+        item.setdefault("case_risks", [])
+        item.setdefault("invalidation", [])
         item["gate_map"] = {gate["name"]: gate for gate in item["gates"]}
+        for gate_name in (
+            "narrative_fit",
+            "team_accountability",
+            "product_delivery",
+            "traction_quality",
+            "token_value_case",
+            "supply_case",
+            "catalyst_window",
+        ):
+            item["gate_map"].setdefault(
+                gate_name,
+                {
+                    "name": gate_name,
+                    "status": "unknown",
+                    "reason": "This legacy assessment predates the investment-case gate.",
+                    "evidence": {},
+                },
+            )
         item["blockers"] = [gate for gate in item["gates"] if gate["status"] != "pass"]
+        item["case_blockers"] = [
+            gate
+            for gate in item["blockers"]
+            if gate["name"] not in {"burn_in", "narrative_state", "investment_case"}
+        ]
         research_gates = [
             item["gate_map"][name]
-            for name in ("narrative_state", "narrative_evidence", "project_diligence")
+            for name in (
+                "narrative_state",
+                "narrative_evidence",
+                "project_diligence",
+                "narrative_fit",
+                "team_accountability",
+                "product_delivery",
+                "traction_quality",
+                "token_value_case",
+                "supply_case",
+                "catalyst_window",
+                "investment_case",
+            )
+            if name in item["gate_map"]
         ]
         item["research_status"] = (
             "fail"
@@ -111,6 +172,26 @@ def _prepare(data: dict[str, Any]) -> dict[str, Any]:
         item["packet"] = json.loads(item.pop("proposal_json"))
     data["paper_proposable_count"] = sum(
         item["state"] == "proposable" for item in data["paper_candidates"]
+    )
+    case_rank = {
+        "paper_ready": 5,
+        "shadow_ready": 4,
+        "worthy_case": 3,
+        "early_lead": 2,
+        "developing": 1,
+    }
+    data["investment_cases"] = sorted(
+        data["paper_candidates"],
+        key=lambda item: (
+            case_rank.get(item["case_stage"], 0),
+            float(item["case_score"]),
+            float(item["case_coverage_pct"]),
+        ),
+        reverse=True,
+    )[:3]
+    data["worthy_case_count"] = sum(
+        item["case_stage"] in {"worthy_case", "shadow_ready", "paper_ready"}
+        for item in data["paper_candidates"]
     )
 
     assets = {item["asset_id"]: item for item in data["assets"]}

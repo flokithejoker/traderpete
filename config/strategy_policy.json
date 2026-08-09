@@ -1,7 +1,8 @@
 {
-  "version": "paper-v2",
+  "version": "paper-v3",
   "mode": "paper_only",
-  "minimum_prospective_days": 30,
+  "minimum_prospective_days": 2,
+  "strategy_validation_target_days": 30,
   "paper_initial_cash_usd": 300,
   "maximum_open_positions": 2,
   "maximum_deployed_nav_pct": 60,
@@ -22,6 +23,8 @@
   "minimum_depth_multiple": 20,
   "minimum_quality_coverage_pct": 55,
   "minimum_seriousness_score": 60,
+  "minimum_investment_case_score": 70,
+  "minimum_investment_case_coverage_pct": 70,
   "minimum_project_market_age_days": 7,
   "minimum_float_pct": 35,
   "maximum_fdv_to_market_cap": 4,
@@ -31,9 +34,12 @@
   "maximum_atr_14_pct": 15,
   "maximum_price_above_ma20_pct": 20,
   "maximum_candidates_per_run": 4,
+  "investment_case_states": ["observed", "emerging", "accelerating"],
   "dynamic_entry_states": ["emerging", "accelerating"],
   "notes": [
     "All thresholds are frozen policy hypotheses, not demonstrated alpha.",
+    "The 30-day target measures strategy evidence and does not block early shadow cases.",
+    "A paper proposal needs two canonical live days plus every research and investability gate.",
     "Every dynamic observation receives immutable 7-day and 28-day outcome tracking.",
     "No historical web reconstruction is used to claim past narrative performance.",
     "Unknown official contract binding, security, quantified unlock, value-capture, or executable-liquidity evidence blocks a paper proposal."

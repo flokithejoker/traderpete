@@ -15,6 +15,7 @@ from trader_pete.models import (
     GateStatus,
     InvestabilityAssetData,
     InvestabilityDataBundle,
+    InvestmentCaseStage,
     MarketDataBundle,
     PaperCandidateAssessment,
     PaperCandidateState,
@@ -25,7 +26,31 @@ from trader_pete.models import (
     VenueQuoteSnapshot,
 )
 
-RESEARCH_GATES = {"narrative_state", "narrative_evidence", "project_diligence"}
+RESEARCH_GATES = {
+    "narrative_state",
+    "narrative_evidence",
+    "project_diligence",
+    "narrative_fit",
+    "team_accountability",
+    "product_delivery",
+    "traction_quality",
+    "token_value_case",
+    "supply_case",
+    "catalyst_window",
+    "investment_case",
+}
+CASE_GATES = {
+    "narrative_evidence",
+    "project_diligence",
+    "narrative_fit",
+    "team_accountability",
+    "product_delivery",
+    "traction_quality",
+    "token_value_case",
+    "supply_case",
+    "catalyst_window",
+    "investment_case",
+}
 INVESTABILITY_GATES = {
     "asset_identity",
     "contract_security",
@@ -282,6 +307,51 @@ def _assess(
             evidence={"verdict": review.verdict.value if review else "unreviewed"},
         )
     )
+    gates.append(
+        _quality_dimension_gate(
+            "narrative_fit",
+            quality.narrative_fit if quality else None,
+            "No sourced mechanism binds this project and token to the narrative.",
+        )
+    )
+    gates.append(
+        _quality_dimension_gate(
+            "team_accountability",
+            quality.identity_and_team if quality else None,
+            "No sourced team identity or accountability evidence was verified.",
+        )
+    )
+    gates.append(
+        _quality_dimension_gate(
+            "product_delivery",
+            quality.product_delivery if quality else None,
+            "No sourced evidence of a shipped, usable product was verified.",
+        )
+    )
+    gates.append(
+        _quality_dimension_gate(
+            "traction_quality",
+            quality.adoption_and_economics if quality else None,
+            "No sourced adoption or economic growth trend was verified.",
+        )
+    )
+    gates.append(
+        _quality_dimension_gate(
+            "token_value_case",
+            quality.token_value_capture if quality else None,
+            "No sourced mechanism connects project economics to tokenholder value.",
+            require_strong=True,
+        )
+    )
+    gates.append(
+        _quality_dimension_gate(
+            "supply_case",
+            quality.token_supply_and_unlocks if quality else None,
+            "No sourced circulating-supply and near-term unlock assessment was verified.",
+            require_strong=True,
+        )
+    )
+    gates.append(_catalyst_gate(review, as_of))
 
     identity = data.identity
     is_token = bool(identity and (identity.asset_platform_id or identity.contract_candidates))
@@ -385,18 +455,66 @@ def _assess(
     technical, technical_gate = _technical_gate(data, policy, as_of)
     gates.append(technical_gate)
 
-    research_ready = _all_pass(gates, RESEARCH_GATES)
-    investability_ready = research_ready and _all_pass(gates, INVESTABILITY_GATES)
+    case = _investment_case(narrative, review, gates)
+    case_gate_status = (
+        GateStatus.PASS
+        if case[0] >= policy.minimum_investment_case_score
+        and case[1] >= policy.minimum_investment_case_coverage_pct
+        else GateStatus.UNKNOWN
+        if case[1] < policy.minimum_investment_case_coverage_pct
+        else GateStatus.FAIL
+    )
+    gates.append(
+        GateResult(
+            name="investment_case",
+            status=case_gate_status,
+            reason=(
+                f"Case score {case[0]:.1f}/100 with {case[1]:.1f}% decision coverage; "
+                f"requires {policy.minimum_investment_case_score:.0f} and "
+                f"{policy.minimum_investment_case_coverage_pct:.0f}%."
+            ),
+            evidence={"score": case[0], "coverage_pct": case[1], "components": case[2]},
+        )
+    )
+    case_ready = narrative.state.value in policy.investment_case_states and _all_pass(
+        gates, CASE_GATES
+    )
+    paper_research_ready = case_ready and _all_pass(gates, RESEARCH_GATES)
+    investability_ready = case_ready and _all_pass(gates, INVESTABILITY_GATES)
     technical_ready = technical_gate.status is GateStatus.PASS
     burn_in_ready = gates[0].status is GateStatus.PASS
-    if investability_ready and technical_ready and burn_in_ready:
+    if paper_research_ready and investability_ready and technical_ready and burn_in_ready:
         state = PaperCandidateState.PROPOSABLE
     elif investability_ready:
         state = PaperCandidateState.INVESTABILITY_VERIFIED
-    elif research_ready:
+    elif case_ready:
         state = PaperCandidateState.RESEARCH_QUALIFIED
     else:
         state = PaperCandidateState.RESEARCH_ONLY
+    if state is PaperCandidateState.PROPOSABLE:
+        case_stage = InvestmentCaseStage.PAPER_READY
+    elif case_ready and investability_ready and technical_ready:
+        case_stage = InvestmentCaseStage.SHADOW_READY
+    elif case_ready:
+        case_stage = InvestmentCaseStage.WORTHY_CASE
+    elif (
+        narrative.state.value == "first_seen"
+        and _gate_status(gates, "narrative_evidence") is GateStatus.PASS
+        and _gate_status(gates, "project_diligence") is GateStatus.PASS
+        and _gate_status(gates, "narrative_fit") is GateStatus.PASS
+        and _gate_status(gates, "product_delivery") is GateStatus.PASS
+        and _gate_status(gates, "catalyst_window") is GateStatus.PASS
+        and not any(
+            gate.status is GateStatus.FAIL
+            for gate in gates
+            if gate.name in CASE_GATES and gate.name != "investment_case"
+        )
+        and case[0] >= policy.minimum_investment_case_score * 0.75
+        and case[1] >= 50
+    ):
+        case_stage = InvestmentCaseStage.EARLY_LEAD
+    else:
+        case_stage = InvestmentCaseStage.DEVELOPING
 
     proposed_notional = None
     maximum_loss = None
@@ -421,6 +539,14 @@ def _assess(
                 asset_name=identity.name if identity else data.asset_id,
                 state=PaperCandidateState.INVESTABILITY_VERIFIED if investability_ready else state,
                 research_priority=narrative.score,
+                case_stage=InvestmentCaseStage.SHADOW_READY,
+                case_score=case[0],
+                case_coverage_pct=case[1],
+                case_summary=case[3],
+                case_components=case[2],
+                case_strengths=case[4],
+                case_risks=case[5],
+                invalidation=case[6],
                 gates=gates,
                 quote=quote,
                 diagnostic_quotes=[item for item in data.quotes if not item.executable],
@@ -441,6 +567,14 @@ def _assess(
         asset_name=identity.name if identity else data.asset_id,
         state=state,
         research_priority=narrative.score,
+        case_stage=case_stage,
+        case_score=case[0],
+        case_coverage_pct=case[1],
+        case_summary=case[3],
+        case_components=case[2],
+        case_strengths=case[4],
+        case_risks=case[5],
+        invalidation=case[6],
         gates=gates,
         quote=quote,
         diagnostic_quotes=[item for item in data.quotes if not item.executable],
@@ -448,6 +582,151 @@ def _assess(
         proposed_notional_usd=proposed_notional,
         maximum_initial_loss_usd=maximum_loss,
         reasons=reasons,
+    )
+
+
+def _quality_dimension_gate(
+    name, dimension, unknown_reason: str, *, require_strong: bool = False
+) -> GateResult:
+    if not dimension or dimension.status is EvidenceStatus.UNKNOWN:
+        return GateResult(
+            name=name,
+            status=GateStatus.UNKNOWN,
+            reason=unknown_reason,
+            evidence={"research_status": "unknown", "urls": []},
+        )
+    passing = (
+        dimension.status is EvidenceStatus.STRONG
+        if require_strong
+        else dimension.status in {EvidenceStatus.STRONG, EvidenceStatus.MIXED}
+    )
+    status = GateStatus.PASS if passing else GateStatus.FAIL
+    return GateResult(
+        name=name,
+        status=status,
+        reason=dimension.reason,
+        evidence={
+            "research_status": dimension.status.value,
+            "urls": dimension.evidence_urls,
+        },
+    )
+
+
+def _catalyst_gate(review: ProjectReview | None, as_of: datetime) -> GateResult:
+    if not review or not review.catalyst_at or not review.catalyst_evidence_urls:
+        return GateResult(
+            name="catalyst_window",
+            status=GateStatus.UNKNOWN,
+            reason="No sourced, dated project catalyst was verified inside the next 28 days.",
+            evidence={},
+        )
+    catalyst_at = _as_utc(review.catalyst_at)
+    decision_at = _as_utc(as_of)
+    days_until = (catalyst_at - decision_at).total_seconds() / 86_400
+    in_window = 0 <= days_until <= 28
+    return GateResult(
+        name="catalyst_window",
+        status=GateStatus.PASS if in_window else GateStatus.FAIL,
+        reason=(
+            f"{review.catalyst} ({days_until:.1f} days from the decision)."
+            if in_window
+            else "The sourced project catalyst is outside the four-week decision horizon."
+        ),
+        evidence={
+            "catalyst_at": catalyst_at.isoformat(),
+            "days_until": round(days_until, 2),
+            "urls": review.catalyst_evidence_urls,
+        },
+    )
+
+
+def _investment_case(narrative, review, gates):
+    gate_map = {item.name: item for item in gates}
+    quality = review.quality if review else None
+
+    def gate_component(names: tuple[str, ...]) -> tuple[float, float]:
+        selected = [gate_map[name] for name in names if name in gate_map]
+        known = [item for item in selected if item.status is not GateStatus.UNKNOWN]
+        if not selected:
+            return 0.0, 0.0
+        value = sum(item.status is GateStatus.PASS for item in selected) / len(selected) * 100
+        coverage = len(known) / len(selected) * 100
+        return value, coverage
+
+    seriousness = float(quality.seriousness_score or 0) if quality else 0.0
+    quality_coverage = float(quality.quality_coverage) if quality else 0.0
+    component_specs = {
+        "narrative_priority": (20.0, float(narrative.score), 100.0),
+        "narrative_evidence": (
+            10.0,
+            *gate_component(("narrative_evidence",)),
+        ),
+        "project_quality": (
+            20.0,
+            seriousness * quality_coverage / 100,
+            quality_coverage,
+        ),
+        "narrative_fit": (15.0, *gate_component(("narrative_fit",))),
+        "traction": (15.0, *gate_component(("traction_quality",))),
+        "catalyst": (10.0, *gate_component(("catalyst_window",))),
+        "token_economics": (5.0, *gate_component(("token_value_case", "supply_case"))),
+        "entry_quality": (
+            5.0,
+            *gate_component(("executable_liquidity", "technical_entry")),
+        ),
+    }
+    components = {
+        name: {
+            "weight": weight,
+            "value": round(value, 1),
+            "coverage_pct": round(coverage, 1),
+        }
+        for name, (weight, value, coverage) in component_specs.items()
+    }
+    score = round(sum(weight * value / 100 for weight, value, _ in component_specs.values()), 1)
+    coverage = round(sum(weight * known / 100 for weight, _, known in component_specs.values()), 1)
+    strengths = [f"Narrative research priority {narrative.score:.1f}/100."]
+    for name in (
+        "narrative_evidence",
+        "narrative_fit",
+        "team_accountability",
+        "product_delivery",
+        "traction_quality",
+        "token_value_case",
+        "supply_case",
+        "catalyst_window",
+    ):
+        gate = gate_map.get(name)
+        if gate and gate.status is GateStatus.PASS:
+            strengths.append(gate.reason)
+    risks = list(review.risks if review else [])
+    if quality:
+        risks.extend(quality.red_flags)
+    for name in (
+        "supply_transparency",
+        "token_value_capture",
+        "executable_liquidity",
+        "technical_entry",
+    ):
+        gate = gate_map.get(name)
+        if gate and gate.status is not GateStatus.PASS:
+            risks.append(gate.reason)
+    summary = (
+        review.investment_thesis.strip()
+        if review and review.investment_thesis.strip()
+        else "No falsifiable four-week project thesis has been verified yet."
+    )
+    invalidation = (
+        review.invalidation if review and review.invalidation else [narrative.counter_thesis]
+    )
+    return (
+        score,
+        coverage,
+        components,
+        summary,
+        list(dict.fromkeys(strengths))[:5],
+        list(dict.fromkeys(risks))[:5],
+        list(dict.fromkeys(invalidation))[:3],
     )
 
 
@@ -603,15 +882,15 @@ def _liquidity_gate(
             ),
             evidence={"observed_routes": len(quotes)},
         )
-    quote = min(executable, key=lambda item: float(item.estimated_round_trip_cost_bps or 100_000))
+    quote = min(executable, key=lambda item: float(item.estimated_round_trip_cost_bps))
     required_depth = quote.intended_notional_usd * policy.minimum_depth_multiple
     checks = {
-        "spread": float(quote.spread_bps or 100_000) <= policy.maximum_spread_pct * 100,
-        "buy_impact": float(quote.buy_impact_bps or 100_000)
+        "spread": _missing_high(quote.spread_bps) <= policy.maximum_spread_pct * 100,
+        "buy_impact": _missing_high(quote.buy_impact_bps)
         <= policy.maximum_one_way_impact_pct * 100,
-        "sell_impact": float(quote.sell_impact_bps or 100_000)
+        "sell_impact": _missing_high(quote.sell_impact_bps)
         <= policy.maximum_one_way_impact_pct * 100,
-        "round_trip": float(quote.estimated_round_trip_cost_bps or 100_000)
+        "round_trip": _missing_high(quote.estimated_round_trip_cost_bps)
         <= policy.maximum_round_trip_cost_pct * 100,
         "buy_depth": float(quote.buy_depth_1pct_usd or 0) >= required_depth,
         "sell_depth": float(quote.sell_depth_1pct_usd or 0) >= required_depth,
@@ -748,6 +1027,20 @@ def _gate(name: str, passed: bool, reason: str, evidence: dict[str, object]) -> 
         reason=reason,
         evidence=evidence,
     )
+
+
+def _missing_high(value: float | None) -> float:
+    return 100_000.0 if value is None else float(value)
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _gate_status(gates: list[GateResult], name: str) -> GateStatus | None:
+    return next((item.status for item in gates if item.name == name), None)
 
 
 def _all_pass(gates: list[GateResult], names: set[str]) -> bool:

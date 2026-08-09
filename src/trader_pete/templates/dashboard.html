@@ -12,16 +12,16 @@
     section { margin-top:13px; } .eyebrow { color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:.14em; } .muted,.micro { color:var(--muted); } .micro { display:block; font-size:11px; margin-top:2px; }
     .grid { display:grid; gap:12px; } .kpis { grid-template-columns:repeat(6,minmax(0,1fr)); margin-top:17px; } .events { grid-template-columns:repeat(3,minmax(0,1fr)); } .focus-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
     .card { background:linear-gradient(145deg,var(--panel),#0c1119); border:1px solid var(--line); border-radius:13px; padding:14px; box-shadow:0 10px 30px #0003; }
-    .kpi strong { display:block; font-size:22px; margin-top:6px; font-variant-numeric:tabular-nums; } .brief { border-left:3px solid var(--blue); } .brief p { margin:4px 0 0; max-width:1050px; font-size:15px; }
+    .kpi strong { display:block; font-size:22px; margin-top:6px; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; } .brief { border-left:3px solid var(--blue); } .brief p { margin:4px 0 0; max-width:1050px; font-size:15px; }
     .badge { display:inline-flex; padding:3px 8px; border-radius:99px; background:#1c2a3d; color:var(--blue); font-size:10px; line-height:1.3; text-transform:uppercase; letter-spacing:.07em; white-space:nowrap; }
     .badge.leading,.badge.building,.badge.credible,.badge.emerging,.badge.accelerating,.badge.strong,.badge.measured { background:#12362a; color:var(--green); }
     .badge.active,.badge.mixed,.badge.observed { background:#292f3d; color:#c5d3e8; } .badge.first_seen { background:#173253; color:#9ec2ff; }
     .badge.cooling,.badge.speculative,.badge.failed,.badge.crowded,.badge.fading,.badge.rejected,.badge.weak { background:#3b2228; color:#ffabb4; }
     .badge.dormant,.badge.insufficient,.badge.unknown,.badge.unavailable { background:#242630; color:#9aa4b5; } .badge.focus { background:#173253; color:#9ec2ff; }
-    .badge.pass,.badge.proposable,.badge.investability_verified,.badge.approved { background:#12362a; color:var(--green); }
+    .badge.pass,.badge.proposable,.badge.investability_verified,.badge.approved,.badge.paper_ready,.badge.shadow_ready,.badge.worthy_case { background:#12362a; color:var(--green); }
     .badge.fail,.badge.rejected,.badge.expired { background:#3b2228; color:#ffabb4; }
-    .badge.research_qualified,.badge.proposed { background:#173253; color:#9ec2ff; }
-    .badge.research_only { background:#242630; color:#9aa4b5; }
+    .badge.research_qualified,.badge.proposed,.badge.early_lead { background:#173253; color:#9ec2ff; }
+    .badge.research_only,.badge.developing { background:#242630; color:#9aa4b5; }
     .event { min-height:145px; } .event .impact { margin:8px 0; } .chips { display:flex; flex-wrap:wrap; gap:5px; margin-top:8px; }
     table { width:100%; border-collapse:collapse; } th,td { border-bottom:1px solid var(--line); padding:9px 8px; text-align:left; vertical-align:top; } tr:last-child td { border-bottom:0; }
     th { color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:.07em; white-space:nowrap; cursor:pointer; } .scroll { overflow-x:auto; }
@@ -30,10 +30,10 @@
     .meter { width:72px; height:4px; border-radius:8px; background:#202b3c; margin-top:5px; overflow:hidden; } .meter span { display:block; height:100%; background:var(--green); }
     details { color:var(--muted); margin-top:7px; } details p { color:var(--text); margin:8px 0; } details ul { margin:6px 0; padding-left:18px; } a { color:var(--blue); }
     .focus-card { border-top:2px solid #315985; } .callout { margin-top:9px; padding:9px; border-radius:8px; background:#0b121c; } .risk { border-left:2px solid var(--amber); }
-    .health { display:grid; grid-template-columns:1.3fr .7fr; gap:25px; } ul.compact { margin:6px 0 0; padding-left:18px; } .run { display:flex; justify-content:space-between; gap:12px; padding:7px 0; border-bottom:1px solid var(--line); }
+    .health { display:grid; grid-template-columns:1.3fr .7fr; gap:25px; } .health > *,.run > span { min-width:0; } ul.compact { margin:6px 0 0; padding-left:18px; } .run { display:flex; justify-content:space-between; gap:12px; padding:7px 0; border-bottom:1px solid var(--line); } .run > span { overflow-wrap:anywhere; }
     footer { margin:18px 0 3px; color:var(--muted); font-size:11px; } .alert { color:var(--amber); border-color:#685127; }
     @media(max-width:1100px){ .kpis{grid-template-columns:repeat(3,1fr)} .events,.focus-grid{grid-template-columns:1fr 1fr} }
-    @media(max-width:760px){ main{padding:13px} header{align-items:start;flex-direction:column}.kpis{grid-template-columns:repeat(2,1fr)}.events,.focus-grid,.health{grid-template-columns:1fr} }
+    @media(max-width:760px){ main{padding:13px} header{align-items:start;flex-direction:column}.kpis{grid-template-columns:repeat(2,1fr)}.events,.focus-grid,.health{grid-template-columns:1fr}.run{flex-wrap:wrap}.run > span:last-child{width:100%} }
   </style>
 </head>
 <body><main>
@@ -47,7 +47,7 @@
     <div class="card kpi"><span class="eyebrow">Market breadth</span><strong>{{ market_breadth }}%</strong><span class="micro">liquid assets positive over 7d</span></div>
     <div class="card kpi"><span class="eyebrow">Dynamic radar</span><strong>{{ dynamic_narratives|length }}</strong><span class="micro">{{ promoted_dynamic_count }} promoted · niches, not fixed labels</span></div>
     <div class="card kpi"><span class="eyebrow">Social sample</span><strong>{{ social_status }}</strong><span class="micro">diagnostic only · search kept separate</span></div>
-    <div class="card kpi"><span class="eyebrow">Paper readiness</span><strong>{{ paper_decision.readiness_state if paper_decision else 'BLOCKED' }}</strong><span class="micro">{{ paper_decision.prospective_days if paper_decision else 0 }}/30 live canonical days · {{ paper_proposable_count }} proposable</span></div>
+    <div class="card kpi"><span class="eyebrow">Case readiness</span><strong>{{ paper_readiness_label }}</strong><span class="micro">{{ worthy_case_count }} worthy · paper confirmation {{ paper_decision.prospective_days if paper_decision else 0 }}/{{ minimum_signal_days }}d · validation sample {{ paper_decision.prospective_days if paper_decision else 0 }}/{{ validation_target_days }}d</span></div>
     <div class="card kpi{% if is_live and (is_stale or not has_provider_fetch) %} alert{% endif %}"><span class="eyebrow">{% if has_provider_fetch %}Fetch age{% else %}Run mode{% endif %}</span><strong>{% if has_provider_fetch %}{{ age_hours }}h{% elif is_live %}LIVE{% else %}OFFLINE{% endif %}</strong><span class="micro">{% if is_live and not has_provider_fetch %}provider response unavailable or failed{% elif not is_live %}fixture · no live provider timestamp{% elif is_stale %}stale snapshot{% else %}inside daily window{% endif %}</span></div>
   </div>
 
@@ -59,6 +59,22 @@
       {% for event in events %}<article class="card event"><div><span class="badge">{{ event.direction }}</span> <span class="badge">{{ event.horizon }}</span></div><h3 style="margin-top:9px">{{ event.title }}</h3><p class="impact">{{ event.why_it_matters }}</p><div class="chips">{% for name in event.narrative_names %}<span class="badge">{{ name }}</span>{% endfor %}</div>
         <details><summary>{{ event.sources|length }} retrieved citations</summary><ul>{% for source in event.sources %}<li><a href="{{ source.url }}">{{ source.title }}</a><span class="micro">{{ source.publisher }} · {{ source.published_at|date }} · {{ source.claim }}</span></li>{% endfor %}</ul></details>
       </article>{% else %}<article class="card event"><h3>No verified market event</h3><p class="muted">The run did not manufacture a news story when the evidence gate was not met.</p></article>{% endfor %}
+    </div>
+  </section>
+
+  <section>
+    <div class="toolbar"><div><h2>Investment Case Board</h2><span class="muted">Immediate, falsifiable four-week cases. Scores rank evidence completeness and setup quality; they are not expected returns.</span></div><span class="badge">{{ worthy_case_count }} worthy</span></div>
+    <div class="grid focus-grid">
+      {% for item in investment_cases %}<article class="card focus-card">
+        <div><span class="badge {{ item.case_stage }}">{{ item.case_stage|replace('_',' ') }}</span> <span class="badge">case {{ item.case_score|round(1) }}</span> <span class="badge">coverage {{ item.case_coverage_pct|round(1) }}%</span></div>
+        <h3 style="margin-top:9px">{{ item.asset_name }} <span class="muted">· {{ item.narrative_name }}</span></h3>
+        <p>{{ item.case_summary }}</p>
+        <div class="callout"><strong>Catalyst</strong><span class="micro">{{ item.gate_map.catalyst_window.reason }}</span></div>
+        <details><summary>Case score components</summary><ul>{% for name, component in item.case_components.items() %}<li>{{ name|replace('_',' ') }}: {{ component.value }}/100 · weight {{ component.weight }}% · coverage {{ component.coverage_pct }}%</li>{% endfor %}</ul></details>
+        <details open><summary>Evidence for the case</summary><ul>{% for value in item.case_strengths %}<li>{{ value }}</li>{% else %}<li>No strength passed the structured case gate.</li>{% endfor %}</ul></details>
+        <details><summary>Risks and invalidation</summary><ul>{% for value in item.case_risks %}<li>Risk: {{ value }}</li>{% endfor %}{% for value in item.invalidation %}<li>Invalidates: {{ value }}</li>{% endfor %}</ul></details>
+        {% if item.case_blockers %}<div class="callout risk"><strong>Next evidence gap</strong><span class="micro">{{ item.case_blockers[0].name|replace('_',' ') }} · {{ item.case_blockers[0].reason }}</span></div>{% endif %}
+      </article>{% else %}<article class="card"><h3>No case assessed</h3><p class="muted">A live run must resolve and research at least one project.</p></article>{% endfor %}
     </div>
   </section>
 
@@ -115,8 +131,8 @@
     <div class="toolbar"><div><h2>Paper Decision Gate Board</h2><span class="muted">A narrative score cannot override an unknown official contract binding, quantified unlock, security, value-capture, liquidity, or entry gate.</span></div><span class="badge">paper-only · entry-only</span></div>
     <div class="scroll"><table><thead><tr><th>Candidate</th><th>Research</th><th>Identity</th><th>Security</th><th>Supply / unlocks</th><th>Value capture</th><th>Executable route</th><th>Technical entry</th><th>Size / max loss</th><th>First blocker</th></tr></thead><tbody>
       {% for item in paper_candidates %}<tr>
-        <td class="name"><strong>{{ item.asset_name }}</strong><span class="micro">{{ item.narrative_name }}</span><span class="badge {{ item.state }}">{{ item.state|replace('_',' ') }}</span></td>
-        <td><span class="badge {{ item.research_status }}">{{ item.research_status }}</span><span class="micro">state {{ item.gate_map.narrative_state.status }} · evidence {{ item.gate_map.narrative_evidence.status }} · project {{ item.gate_map.project_diligence.status }}</span><span class="micro">proposal burn-in {{ item.gate_map.burn_in.evidence.prospective_days }}/30d</span></td>
+        <td class="name"><strong>{{ item.asset_name }}</strong><span class="micro">{{ item.narrative_name }}</span><span class="badge {{ item.case_stage }}">{{ item.case_stage|replace('_',' ') }}</span><span class="micro">case {{ item.case_score|round(1) }} · coverage {{ item.case_coverage_pct|round(1) }}%</span></td>
+        <td><span class="badge {{ item.research_status }}">{{ item.research_status }}</span><span class="micro">state {{ item.gate_map.narrative_state.status }} · evidence {{ item.gate_map.narrative_evidence.status }} · fit {{ item.gate_map.narrative_fit.status }} · traction {{ item.gate_map.traction_quality.status }} · catalyst {{ item.gate_map.catalyst_window.status }}</span><span class="micro">paper confirmation {{ item.gate_map.burn_in.evidence.prospective_days }}/{{ minimum_signal_days }}d · strategy sample target {{ validation_target_days }}d</span></td>
         <td><span class="badge {{ item.gate_map.asset_identity.status }}">{{ item.gate_map.asset_identity.status }}</span><span class="micro">{{ item.gate_map.asset_identity.evidence.chain_id or 'unresolved' }}</span></td>
         <td><span class="badge {{ item.gate_map.contract_security.status }}">{{ item.gate_map.contract_security.status }}</span><span class="micro">top-10 holders {{ item.gate_map.contract_security.evidence.top10_holder_pct if item.gate_map.contract_security.evidence.top10_holder_pct is not none else 'N/A' }}%</span><details><summary>screen</summary><p>{{ item.gate_map.contract_security.reason }}</p></details></td>
         <td><span class="badge {{ item.gate_map.supply_transparency.status }}">{{ item.gate_map.supply_transparency.status }}</span><span class="micro">float {{ item.gate_map.supply_transparency.evidence.float_pct if item.gate_map.supply_transparency.evidence.float_pct is not none else 'N/A' }}% · next 35d {{ item.gate_map.supply_transparency.evidence.next_35d_unlock_pct if item.gate_map.supply_transparency.evidence.next_35d_unlock_pct is not none else 'unquantified' }}</span></td>
@@ -133,7 +149,7 @@
 
   <section class="card">
     <div class="health"><div><h2>Social sample diagnostics</h2>{% if social_metrics %}{% for item in social_metrics %}<div class="run"><span><strong>{{ item.target_id }}</strong><span class="micro">{{ item.provider }} · {{ item.raw_posts }} returned posts · {{ item.unique_authors }} authors · {% if item.coverage == 'unavailable' %}not sampled{% elif item.right_censored %}right-censored{% else %}complete requested sample{% endif %}</span><span class="micro">{{ item.limitation }}</span></span><span><span class="badge {{ item.coverage }}">{{ item.coverage }}</span><span class="micro">lexicon stance {{ item.sentiment_score if item.sentiment_score is not none else 'N/A' }} · coordination {{ item.coordination_risk if item.coordination_risk is not none else 'N/A' }} · duplicates {{ item.duplicate_share if item.duplicate_share is not none else 'N/A' }}% · est. ${{ item.estimated_cost_usd if item.estimated_cost_usd is not none else 0 }}</span></span></div>{% endfor %}{% else %}<p class="muted">No social target was sampled. Search popularity is not being relabelled as sentiment.</p>{% endif %}</div>
-      <div><h2>Prospective Phase 2 readiness</h2><span class="badge">{{ paper_decision.readiness_state if paper_decision else 'BLOCKED' }}</span><p>{{ paper_decision.reason if paper_decision else 'Paper policy is not initialized.' }}</p><span class="micro">{{ forecast_cohort_count }} canonical research cohorts · {{ forecast_outcome_count }} fully priced horizon labels · {{ paper_fill_count }} simulated fills · no live orders</span></div></div>
+      <div><h2>Prospective strategy evidence</h2><span class="badge">{{ paper_decision.readiness_state if paper_decision else 'BLOCKED' }}</span><p>{{ paper_decision.reason if paper_decision else 'Paper policy is not initialized.' }}</p><span class="micro">Cases appear immediately · paper confirmation requires {{ minimum_signal_days }}d · confidence target remains {{ validation_target_days }}d · {{ forecast_cohort_count }} canonical research cohorts · {{ forecast_outcome_count }} priced labels · {{ paper_fill_count }} simulated fills · no live orders</span></div></div>
   </section>
 
   <section class="card{% if data_gaps %} alert{% endif %}"><div class="health"><div><h2>Known limits</h2><ul class="compact">{% for gap in data_gaps %}<li>{{ gap }}</li>{% endfor %}</ul></div><div><h2>Run ledger</h2>{% for item in run_history %}<div class="run"><span class="badge {{ item.status }}">{{ item.status }}</span><span>{{ item.as_of[:19] }}<span class="micro">{{ item.mode }} · {{ item.id }}</span></span></div>{% endfor %}</div></div></section>

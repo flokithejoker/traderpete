@@ -25,7 +25,8 @@ def test_offline_pipeline_writes_ledger_and_self_contained_report(tmp_path: Path
     assert "What matters today" in html
     assert "Morning brief" in html
     assert "Dynamic Narrative Radar" in html
-    assert "Prospective Phase 2" in html
+    assert "Investment Case Board" in html
+    assert "Prospective strategy evidence" in html
     assert "Project Explorer" in html
     assert "NO ACTION" in html
     assert "OPENAI_API_KEY" not in html

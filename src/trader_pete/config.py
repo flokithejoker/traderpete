@@ -99,6 +99,7 @@ class StrategyPolicy:
     policy_hash: str
     policy_json: str
     minimum_prospective_days: int
+    strategy_validation_target_days: int
     paper_initial_cash_usd: float
     maximum_open_positions: int
     maximum_deployed_nav_pct: float
@@ -119,6 +120,8 @@ class StrategyPolicy:
     minimum_depth_multiple: float
     minimum_quality_coverage_pct: float
     minimum_seriousness_score: float
+    minimum_investment_case_score: float
+    minimum_investment_case_coverage_pct: float
     minimum_project_market_age_days: int
     minimum_float_pct: float
     maximum_fdv_to_market_cap: float
@@ -128,6 +131,7 @@ class StrategyPolicy:
     maximum_atr_14_pct: float
     maximum_price_above_ma20_pct: float
     maximum_candidates_per_run: int
+    investment_case_states: tuple[str, ...]
     dynamic_entry_states: tuple[str, ...]
 
     @classmethod
@@ -139,6 +143,7 @@ class StrategyPolicy:
             policy_hash=hashlib.sha256(raw).hexdigest(),
             policy_json=raw.decode("utf-8"),
             minimum_prospective_days=int(data["minimum_prospective_days"]),
+            strategy_validation_target_days=int(data["strategy_validation_target_days"]),
             paper_initial_cash_usd=float(data["paper_initial_cash_usd"]),
             maximum_open_positions=int(data["maximum_open_positions"]),
             maximum_deployed_nav_pct=float(data["maximum_deployed_nav_pct"]),
@@ -159,6 +164,10 @@ class StrategyPolicy:
             minimum_depth_multiple=float(data["minimum_depth_multiple"]),
             minimum_quality_coverage_pct=float(data["minimum_quality_coverage_pct"]),
             minimum_seriousness_score=float(data["minimum_seriousness_score"]),
+            minimum_investment_case_score=float(data["minimum_investment_case_score"]),
+            minimum_investment_case_coverage_pct=float(
+                data["minimum_investment_case_coverage_pct"]
+            ),
             minimum_project_market_age_days=int(data["minimum_project_market_age_days"]),
             minimum_float_pct=float(data["minimum_float_pct"]),
             maximum_fdv_to_market_cap=float(data["maximum_fdv_to_market_cap"]),
@@ -170,5 +179,6 @@ class StrategyPolicy:
             maximum_atr_14_pct=float(data["maximum_atr_14_pct"]),
             maximum_price_above_ma20_pct=float(data["maximum_price_above_ma20_pct"]),
             maximum_candidates_per_run=int(data["maximum_candidates_per_run"]),
+            investment_case_states=tuple(data["investment_case_states"]),
             dynamic_entry_states=tuple(data["dynamic_entry_states"]),
         )

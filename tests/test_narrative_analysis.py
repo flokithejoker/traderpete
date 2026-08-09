@@ -11,13 +11,17 @@ from trader_pete.analysis.scoring import evidence_metrics
 from trader_pete.config import Settings
 from trader_pete.models import (
     DailyLandscapeResearch,
+    DynamicNarrativeMetrics,
+    DynamicNarrativeSnapshot,
+    DynamicNarrativeState,
+    DynamicRadarSnapshot,
     EvidenceSource,
     MarketEvent,
     NarrativeSignals,
     RunMode,
 )
 from trader_pete.providers import collect_market_data
-from trader_pete.research.narratives import NarrativeResearcher
+from trader_pete.research.narratives import NarrativeResearcher, _project_research_shortlist
 
 
 def _signals(**overrides: float) -> NarrativeSignals:
@@ -164,6 +168,51 @@ def test_stale_project_market_data_is_excluded_from_ranking() -> None:
     assert solana.metrics.market_data_age_hours > 48
     assert solana.metrics.price_7d_pct is None
     assert not solana.research_eligible
+
+
+def test_project_research_shortlist_requires_confirmed_discovery_lanes() -> None:
+    settings = Settings.from_env(Path.cwd())
+    bundle, landscape = _landscape(settings)
+
+    def candidate(narrative_id: str, asset_id: str, score: float, lanes: int):
+        return DynamicNarrativeSnapshot(
+            narrative_id=narrative_id,
+            name=narrative_id,
+            mechanism="A measured mechanism.",
+            summary="Test candidate.",
+            state=DynamicNarrativeState.FIRST_SEEN,
+            score=score,
+            confidence=80,
+            persistence_days=1,
+            first_seen_at=bundle.observed_at,
+            last_seen_at=bundle.observed_at,
+            catalyst="Test catalyst.",
+            counter_thesis="Test counter-thesis.",
+            constituent_ids=[asset_id],
+            metrics=DynamicNarrativeMetrics(
+                market_confirmation=80,
+                evidence_quality=80,
+                overheat_risk=20,
+                measured_asset_count=1,
+                protocol_metric_count=1,
+                trending_asset_count=0,
+                unique_evidence_roots=2,
+                lane_count=lanes,
+            ),
+        )
+
+    radar = DynamicRadarSnapshot(
+        as_of=bundle.observed_at,
+        narratives=[
+            candidate("unsupported_hype", "bitcoin", 99, 0),
+            candidate("confirmed_niche", "hyperliquid", 75, 2),
+        ],
+    )
+
+    shortlist = _project_research_shortlist(bundle, landscape, radar)
+
+    assert shortlist[0]["project_id"] == "hyperliquid"
+    assert all(item["project_id"] != "bitcoin" for item in shortlist)
 
 
 def test_offline_research_is_explicit_about_missing_live_evidence() -> None:

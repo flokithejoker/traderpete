@@ -1922,6 +1922,7 @@ class Database:
         """Persist one decision and, at most, one immutable entry proposal."""
         now = datetime.now(UTC)
         proposal_id = None
+        decision_action = "NO_ACTION"
         portfolio_id = f"paper-{policy.policy_hash[:16]}"
         qualified = sum(item.state.value != "research_only" for item in evaluation.candidates)
         with self.connect() as connection:
@@ -1934,32 +1935,21 @@ class Database:
             proposable = [
                 item for item in evaluation.candidates if item.state.value == "proposable"
             ]
+            shadow_cases = [
+                item for item in evaluation.candidates if item.case_stage.value == "shadow_ready"
+            ]
+            worthy_cases = [
+                item
+                for item in evaluation.candidates
+                if item.case_stage.value in {"worthy_case", "shadow_ready", "paper_ready"}
+            ]
             if run_mode is not RunMode.LIVE:
                 readiness = "BLOCKED_OFFLINE_OBSERVATION"
                 reason = "Offline evidence cannot originate a paper proposal."
             elif not is_canonical:
                 readiness = "BLOCKED_NONCANONICAL_RERUN"
                 reason = "Only the first complete scheduled run for the policy/date may propose."
-            elif evaluation.prospective_days < policy.minimum_prospective_days:
-                readiness = "BLOCKED_INSUFFICIENT_HISTORY"
-                reason = (
-                    f"Canonical live history is {evaluation.prospective_days}/"
-                    f"{policy.minimum_prospective_days} consecutive days."
-                )
-            elif not proposable:
-                states = {item.state.value for item in evaluation.candidates}
-                if "investability_verified" in states:
-                    readiness = "WAITING_FOR_TECHNICAL_ENTRY"
-                elif "research_qualified" in states:
-                    readiness = "BLOCKED_INVESTABILITY"
-                else:
-                    readiness = "NO_RESEARCH_QUALIFIED_CANDIDATE"
-                reason = (
-                    "; ".join(evaluation.candidates[0].reasons[:2])
-                    if evaluation.candidates
-                    else "No bounded project candidate was available for investability checks."
-                )
-            else:
+            elif proposable:
                 candidate = proposable[0]
                 capacity_reason = self._paper_capacity_reason(connection, portfolio_id, policy, now)
                 if capacity_reason:
@@ -2048,9 +2038,47 @@ class Database:
                         ),
                     )
                     readiness = "PROPOSAL_AWAITING_HUMAN"
+                    decision_action = "PROPOSE_ENTRY"
                     reason = (
-                        f"{candidate.asset_name} passed every paper-v1 gate; approval is required."
+                        f"{candidate.asset_name} passed every {policy.version} gate; approval is "
+                        "required."
                     )
+            elif shadow_cases:
+                candidate = shadow_cases[0]
+                readiness = "SHADOW_CASE_READY"
+                decision_action = "TRACK_SHADOW_CASE"
+                reason = (
+                    f"{candidate.asset_name} has a {candidate.case_score:.1f}/100 case and a "
+                    "valid entry setup; it is being observed before paper eligibility."
+                )
+            elif worthy_cases:
+                candidate = worthy_cases[0]
+                readiness = "WORTHY_CASE_MONITORING"
+                decision_action = "WATCH_CASE"
+                reason = (
+                    f"{candidate.asset_name} has a {candidate.case_score:.1f}/100 sourced case; "
+                    "remaining investability or entry gates still block a proposal."
+                )
+            elif evaluation.prospective_days < policy.minimum_prospective_days:
+                readiness = "BUILDING_EARLY_EVIDENCE"
+                reason = (
+                    f"Cases are visible now; paper eligibility needs "
+                    f"{evaluation.prospective_days}/{policy.minimum_prospective_days} canonical "
+                    "live days."
+                )
+            else:
+                states = {item.state.value for item in evaluation.candidates}
+                if "investability_verified" in states:
+                    readiness = "WAITING_FOR_TECHNICAL_ENTRY"
+                elif "research_qualified" in states:
+                    readiness = "BLOCKED_INVESTABILITY"
+                else:
+                    readiness = "NO_WORTHY_INVESTMENT_CASE"
+                reason = (
+                    "; ".join(evaluation.candidates[0].reasons[:2])
+                    if evaluation.candidates
+                    else "No bounded project candidate was available for investability checks."
+                )
             connection.execute(
                 """
                 INSERT INTO paper_decisions (
@@ -2062,7 +2090,7 @@ class Database:
                 (
                     run_id,
                     policy.version,
-                    "PROPOSE_ENTRY" if proposal_id else "NO_ACTION",
+                    decision_action,
                     reason,
                     evaluation.prospective_days,
                     qualified,
@@ -2670,6 +2698,14 @@ class Database:
                 "SELECT * FROM paper_decisions WHERE run_id = ?",
                 (run_id,),
             ).fetchone()
+            paper_policy = (
+                connection.execute(
+                    "SELECT policy_json FROM strategy_policy_versions WHERE policy_hash = ?",
+                    (paper_decision["policy_hash"],),
+                ).fetchone()
+                if paper_decision
+                else None
+            )
             paper_candidates = connection.execute(
                 """
                 SELECT * FROM paper_candidate_assessments
@@ -2797,6 +2833,7 @@ class Database:
             "social_metrics": [dict(row) for row in social],
             "provider_fetch": dict(provider_fetch),
             "paper_decision": dict(paper_decision) if paper_decision else None,
+            "paper_policy_json": paper_policy["policy_json"] if paper_policy else "{}",
             "paper_candidates": [dict(row) for row in paper_candidates],
             "paper_proposals": [dict(row) for row in paper_proposals],
             "paper_portfolio": dict(portfolio) if portfolio else None,

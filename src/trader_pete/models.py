@@ -79,6 +79,14 @@ class PaperCandidateState(StrEnum):
     PROPOSABLE = "proposable"
 
 
+class InvestmentCaseStage(StrEnum):
+    DEVELOPING = "developing"
+    EARLY_LEAD = "early_lead"
+    WORTHY_CASE = "worthy_case"
+    SHADOW_READY = "shadow_ready"
+    PAPER_READY = "paper_ready"
+
+
 class NarrativeLifecycle(StrEnum):
     SEED = "seed"
     NASCENT = "nascent"
@@ -448,6 +456,12 @@ class ProjectQualityDimension(FrozenModel):
 
 
 class ProjectQualityAssessment(FrozenModel):
+    narrative_fit: ProjectQualityDimension = Field(
+        default_factory=lambda: ProjectQualityDimension(
+            status=EvidenceStatus.UNKNOWN,
+            reason="No sourced project-to-narrative mechanism was supplied.",
+        )
+    )
     identity_and_team: ProjectQualityDimension
     funding_and_backing: ProjectQualityDimension
     product_delivery: ProjectQualityDimension
@@ -481,8 +495,12 @@ class ProjectReview(FrozenModel):
     product_traction: str
     community_quality: str
     catalyst: str
+    investment_thesis: str = ""
+    catalyst_at: datetime | None = None
+    catalyst_evidence_urls: list[str] = Field(default_factory=list, max_length=2)
+    invalidation: list[str] = Field(default_factory=list, max_length=3)
     risks: list[str] = Field(default_factory=list, max_length=2)
-    sources: list[EvidenceSource] = Field(default_factory=list, max_length=2)
+    sources: list[EvidenceSource] = Field(default_factory=list, max_length=5)
     quality: ProjectQualityAssessment | None = None
 
 
@@ -659,6 +677,14 @@ class PaperCandidateAssessment(FrozenModel):
     asset_name: str
     state: PaperCandidateState
     research_priority: float = Field(ge=0, le=100)
+    case_stage: InvestmentCaseStage = InvestmentCaseStage.DEVELOPING
+    case_score: float = Field(default=0, ge=0, le=100)
+    case_coverage_pct: float = Field(default=0, ge=0, le=100)
+    case_summary: str = ""
+    case_components: dict[str, dict[str, object]] = Field(default_factory=dict)
+    case_strengths: list[str] = Field(default_factory=list, max_length=5)
+    case_risks: list[str] = Field(default_factory=list, max_length=5)
+    invalidation: list[str] = Field(default_factory=list, max_length=3)
     gates: list[GateResult]
     quote: VenueQuoteSnapshot | None = None
     diagnostic_quotes: list[VenueQuoteSnapshot] = Field(default_factory=list)

@@ -84,6 +84,7 @@ def _research(as_of: datetime, *, with_review: bool = True) -> DailyLandscapeRes
         evidence_urls=[source.url],
     )
     quality = ProjectQualityAssessment(
+        narrative_fit=strong,
         identity_and_team=strong,
         funding_and_backing=strong,
         product_delivery=strong,
@@ -112,7 +113,13 @@ def _research(as_of: datetime, *, with_review: bool = True) -> DailyLandscapeRes
                 team_and_backing="Test",
                 product_traction="Test",
                 community_quality="Test",
-                catalyst="Test",
+                catalyst="A scheduled test catalyst changes token demand.",
+                investment_thesis=(
+                    "Measured niche usage and the dated catalyst can increase token demand."
+                ),
+                catalyst_at=as_of + timedelta(days=10),
+                catalyst_evidence_urls=[source.url],
+                invalidation=["Usage growth reverses.", "The catalyst is cancelled."],
                 sources=[source],
                 quality=quality,
             )
@@ -269,6 +276,8 @@ def test_mixed_value_capture_never_passes() -> None:
     )
     gate = next(item for item in result.candidates[0].gates if item.name == "token_value_capture")
     assert gate.status.value == "unknown"
+    case_gate = next(item for item in result.candidates[0].gates if item.name == "token_value_case")
+    assert case_gate.status.value == "fail"
 
 
 def test_known_supply_failure_is_not_masked_by_unknown_unlock() -> None:
@@ -333,11 +342,74 @@ def test_burn_in_is_a_proposal_gate_not_a_research_gate() -> None:
         _research(as_of),
         _investability(as_of),
         policy,
-        prospective_days=29,
+        prospective_days=policy.minimum_prospective_days - 1,
     )
 
     assert result.candidates[0].state.value == "investability_verified"
+    assert result.candidates[0].case_stage.value == "shadow_ready"
+    assert result.candidates[0].case_score >= policy.minimum_investment_case_score
     assert result.candidates[0].proposed_notional_usd is None
+
+
+def test_zero_price_impact_is_valid_liquidity_evidence() -> None:
+    as_of = datetime(2026, 8, 9, tzinfo=UTC)
+    policy = StrategyPolicy.load(Path.cwd() / "config/strategy_policy.json")
+    investability = _investability(as_of)
+    asset = investability.assets[0]
+    quote = asset.quotes[0].model_copy(update={"buy_impact_bps": 0, "sell_impact_bps": 0})
+    investability = investability.model_copy(
+        update={"assets": [asset.model_copy(update={"quotes": [quote]})]}
+    )
+
+    result = evaluate_paper_candidates(
+        _radar(as_of),
+        _research(as_of),
+        investability,
+        policy,
+        prospective_days=policy.minimum_prospective_days,
+    )
+
+    gate = next(item for item in result.candidates[0].gates if item.name == "executable_liquidity")
+    assert gate.status.value == "pass"
+
+
+def test_day_one_shadow_case_is_visible_without_a_proposal(tmp_path: Path) -> None:
+    as_of = datetime(2026, 8, 9, tzinfo=UTC)
+    policy = StrategyPolicy.load(Path.cwd() / "config/strategy_policy.json")
+    investability = _investability(as_of)
+    evaluation = evaluate_paper_candidates(
+        _radar(as_of),
+        _research(as_of),
+        investability,
+        policy,
+        prospective_days=1,
+    )
+    database = Database(tmp_path / "shadow.db")
+    database.initialize()
+    run_id = database.create_run(as_of=as_of, mode=RunMode.LIVE, config={})
+    database.store_paper_evidence(
+        run_id=run_id,
+        investability=investability,
+        evaluation=evaluation,
+        policy=policy,
+    )
+    database.finish_run(run_id, RunStatus.SUCCEEDED)
+
+    proposal_id = database.finalize_paper_decision(
+        run_id=run_id,
+        evaluation=evaluation,
+        policy=policy,
+        is_canonical=True,
+        run_mode=RunMode.LIVE,
+    )
+
+    assert proposal_id is None
+    with database.connect() as connection:
+        decision = connection.execute(
+            "SELECT action, readiness_state FROM paper_decisions WHERE run_id = ?", (run_id,)
+        ).fetchone()
+    assert decision["action"] == "TRACK_SHADOW_CASE"
+    assert decision["readiness_state"] == "SHADOW_CASE_READY"
 
 
 @pytest.mark.parametrize(
