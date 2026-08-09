@@ -1,0 +1,10 @@
+[
+  {"id": "currency", "name": "Currency"},
+  {"id": "smart_contract_platform", "name": "Smart Contract Platform"},
+  {"id": "defi", "name": "DeFi"},
+  {"id": "culture_entertainment", "name": "Culture & Entertainment"},
+  {"id": "computing", "name": "Computing"},
+  {"id": "digitization", "name": "Digitization"},
+  {"id": "stablecoin", "name": "Stablecoin"}
+]
+

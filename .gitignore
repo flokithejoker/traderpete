@@ -1,0 +1,20 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Runtime state is local and may contain licensed/provider data.
+data/*.db
+data/*.db-*
+data/raw/
+reports/*.html
+
+# Keep directories in fresh clones.
+!data/.gitkeep
+!reports/.gitkeep
+
