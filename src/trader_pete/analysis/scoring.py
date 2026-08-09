@@ -15,6 +15,14 @@ from trader_pete.models import (
 )
 
 TRACKING_PARAMETERS = {"fbclid", "gclid", "mc_cid", "mc_eid", "ref", "source"}
+AUTHORITATIVE_DOMAINS = {
+    "github.com",
+    "sec.gov",
+    "cftc.gov",
+    "europa.eu",
+    "gov.uk",
+    "snapshot.org",
+}
 
 
 def _clamp(value: float) -> float:
@@ -50,20 +58,10 @@ def source_domain(url: str) -> str:
 
 
 def is_primary_source(source: EvidenceSource) -> bool:
-    if source.is_primary:
-        return True
-    source_type = source.source_type.lower()
-    primary_markers = (
-        "official",
-        "primary",
-        "filing",
-        "governance",
-        "onchain",
-        "repository",
-        "regulator",
-        "verified_",
+    domain = source_domain(source.url)
+    return domain in AUTHORITATIVE_DOMAINS or any(
+        domain.endswith(f".{value}") for value in AUTHORITATIVE_DOMAINS
     )
-    return any(marker in source_type for marker in primary_markers)
 
 
 def _source_prior(source: EvidenceSource) -> float:
@@ -130,7 +128,7 @@ def evidence_metrics(
     source_prior = sum(_source_prior(source) for source in sources) / len(sources)
     independent_score = min(100, len(roots) * 35 + len(publishers) * 10)
     provenance_score = 100 if primary_count else 55 if len(roots) >= 2 else 20
-    verified = primary_count > 0 or (len(roots) >= 2 and len(publishers) >= 2)
+    verified = len(roots) >= 2 and len(publishers) >= 2 and contradictions == 0
     contradiction_penalty = min(25, contradictions * 8)
     quality = _clamp(
         0.35 * provenance_score

@@ -82,17 +82,27 @@ class CoinGeckoClient:
         datetime,
     ]:
         observed_at = utc_now()
-        markets_payload = self._get(
-            "/coins/markets",
-            {
-                "vs_currency": "usd",
-                "order": "market_cap_desc",
-                "per_page": 250,
-                "page": 1,
-                "sparkline": "false",
-                "price_change_percentage": "24h,7d,30d",
-            },
-        )
+        markets_payload: list[dict[str, Any]] = []
+        for page in range(1, 5):
+            try:
+                page_payload = self._get(
+                    "/coins/markets",
+                    {
+                        "vs_currency": "usd",
+                        "order": "market_cap_desc",
+                        "per_page": 250,
+                        "page": page,
+                        "sparkline": "false",
+                        "price_change_percentage": "24h,7d,30d",
+                    },
+                )
+            except RuntimeError:
+                if page == 1:
+                    raise
+                break
+            markets_payload.extend(page_payload)
+            if len(page_payload) < 250:
+                break
         categories_payload = self._get("/coins/categories", {"order": "market_cap_desc"})
         trending_payload = self._get("/search/trending", {})
 
@@ -122,11 +132,12 @@ class CoinGeckoClient:
             assets.extend(
                 self._parse_asset(item, observed_at) for item in requested_markets_payload
             )
+        assets = list({asset.asset_id: asset for asset in assets}.values())
         categories = [self._parse_category(item, observed_at) for item in categories_payload]
         payloads = [
             ProviderBatch(
                 provider="coingecko",
-                endpoint="/coins/markets?universe=top250",
+                endpoint="/coins/markets?universe=top1000-best-effort",
                 observed_at=observed_at,
                 payload=markets_payload,
             ),

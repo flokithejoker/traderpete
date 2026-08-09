@@ -53,6 +53,41 @@ def _prepare(data: dict[str, Any]) -> dict[str, Any]:
         ]
         item["sources"] = json.loads(item.pop("sources_json"))
 
+    dynamic_members: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for item in data["dynamic_memberships"]:
+        review_json = item.pop("review_json")
+        item["review"] = json.loads(review_json) if review_json else None
+        dynamic_members[item["narrative_id"]].append(item)
+    for item in data["dynamic_narratives"]:
+        for field in (
+            "parent_narrative_ids_json",
+            "aliases_json",
+            "protocol_ids_json",
+            "discovery_lanes_json",
+            "rejection_reasons_json",
+            "metrics_json",
+            "sources_json",
+        ):
+            item[field.removesuffix("_json")] = json.loads(item.pop(field))
+        item["members"] = dynamic_members[item["narrative_id"]]
+        item["parent_names"] = [
+            narrative_names[value]
+            for value in item["parent_narrative_ids"]
+            if value in narrative_names
+        ]
+
+    social = [json.loads(item["metrics_json"]) for item in data["social_metrics"]]
+    data["social_metrics"] = social
+    measured_social = [item for item in social if item["coverage"] == "measured"]
+    partial_social = [item for item in social if item["coverage"] == "partial"]
+    data["social_status"] = (
+        "measured" if measured_social else "partial" if partial_social else "unavailable"
+    )
+    data["social_measured_count"] = len(measured_social)
+    data["promoted_dynamic_count"] = sum(
+        item["state"] in {"emerging", "accelerating"} for item in data["dynamic_narratives"]
+    )
+
     assets = {item["asset_id"]: item for item in data["assets"]}
     bitcoin = assets.get("bitcoin") or {}
     liquid_assets = [
@@ -97,6 +132,15 @@ def _prepare(data: dict[str, Any]) -> dict[str, Any]:
     data["age_hours"] = round(age_hours, 1)
     data["is_stale"] = age_hours > 36
     data["data_gaps"] = json.loads(data["research"]["data_gaps_json"])
+    if data.get("dynamic_research"):
+        data["data_gaps"] = list(
+            dict.fromkeys(
+                [
+                    *data["data_gaps"],
+                    *json.loads(data["dynamic_research"]["data_gaps_json"]),
+                ]
+            )
+        )
     return data
 
 

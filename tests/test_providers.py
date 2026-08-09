@@ -20,6 +20,7 @@ def test_fixture_bundle_is_point_in_time_and_complete(tmp_path: Path, monkeypatc
     assert len(bundle.protocols) >= 5
     assert {batch.provider for batch in bundle.payloads} == {"fixture"}
     assert all(asset.observed_at == bundle.observed_at for asset in bundle.assets)
+    assert len(bundle.assets) == len({item.asset_id for item in bundle.assets})
 
 
 def test_market_bundle_persists_without_rewriting_provider_payload(tmp_path: Path) -> None:

@@ -14,7 +14,10 @@
     .card { background:linear-gradient(145deg,var(--panel),#0c1119); border:1px solid var(--line); border-radius:13px; padding:14px; box-shadow:0 10px 30px #0003; }
     .kpi strong { display:block; font-size:22px; margin-top:6px; font-variant-numeric:tabular-nums; } .brief { border-left:3px solid var(--blue); } .brief p { margin:4px 0 0; max-width:1050px; font-size:15px; }
     .badge { display:inline-flex; padding:3px 8px; border-radius:99px; background:#1c2a3d; color:var(--blue); font-size:10px; line-height:1.3; text-transform:uppercase; letter-spacing:.07em; white-space:nowrap; }
-    .badge.leading,.badge.building,.badge.credible { background:#12362a; color:var(--green); } .badge.active,.badge.mixed { background:#292f3d; color:#c5d3e8; } .badge.cooling,.badge.speculative,.badge.failed { background:#3b2228; color:#ffabb4; } .badge.dormant,.badge.insufficient { background:#242630; color:#9aa4b5; } .badge.focus { background:#173253; color:#9ec2ff; }
+    .badge.leading,.badge.building,.badge.credible,.badge.emerging,.badge.accelerating,.badge.strong,.badge.measured { background:#12362a; color:var(--green); }
+    .badge.active,.badge.mixed,.badge.observed { background:#292f3d; color:#c5d3e8; } .badge.first_seen { background:#173253; color:#9ec2ff; }
+    .badge.cooling,.badge.speculative,.badge.failed,.badge.crowded,.badge.fading,.badge.rejected,.badge.weak { background:#3b2228; color:#ffabb4; }
+    .badge.dormant,.badge.insufficient,.badge.unknown,.badge.unavailable { background:#242630; color:#9aa4b5; } .badge.focus { background:#173253; color:#9ec2ff; }
     .event { min-height:145px; } .event .impact { margin:8px 0; } .chips { display:flex; flex-wrap:wrap; gap:5px; margin-top:8px; }
     table { width:100%; border-collapse:collapse; } th,td { border-bottom:1px solid var(--line); padding:9px 8px; text-align:left; vertical-align:top; } tr:last-child td { border-bottom:0; }
     th { color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:.07em; white-space:nowrap; cursor:pointer; } .scroll { overflow-x:auto; }
@@ -38,71 +41,80 @@
   <div class="grid kpis">
     <div class="card kpi"><span class="eyebrow">BTC 7D</span><strong class="{% if btc_7d and btc_7d > 0 %}positive{% elif btc_7d and btc_7d < 0 %}negative{% endif %}">{{ btc_7d|pct }}</strong><span class="micro">30d {{ btc_30d|pct }}</span></div>
     <div class="card kpi"><span class="eyebrow">Market breadth</span><strong>{{ market_breadth }}%</strong><span class="micro">liquid assets positive over 7d</span></div>
-    <div class="card kpi"><span class="eyebrow">Focus narratives</span><strong>{{ focus_narratives|length }}</strong><span class="micro">passed breadth and coverage gates · NO ACTION</span></div>
-    <div class="card kpi"><span class="eyebrow">Project coverage</span><strong>{{ coverage_pct }}%</strong><span class="micro">registry projects with market data</span></div>
-    <div class="card kpi"><span class="eyebrow">Economic rows</span><strong>{{ protocol_activity_count }}</strong><span class="micro">fees · revenue · DEX volume</span></div>
+    <div class="card kpi"><span class="eyebrow">Dynamic radar</span><strong>{{ dynamic_narratives|length }}</strong><span class="micro">{{ promoted_dynamic_count }} promoted · niches, not fixed labels</span></div>
+    <div class="card kpi"><span class="eyebrow">Social sample</span><strong>{{ social_status }}</strong><span class="micro">diagnostic only · search kept separate</span></div>
+    <div class="card kpi"><span class="eyebrow">Paper readiness</span><strong>{{ paper_decision.readiness_state if paper_decision else 'BLOCKED' }}</strong><span class="micro">{{ paper_decision.prospective_days if paper_decision else 0 }}/30 live canonical days</span></div>
     <div class="card kpi{% if is_stale %} alert{% endif %}"><span class="eyebrow">Fetch age</span><strong>{{ age_hours }}h</strong><span class="micro">{% if is_stale %}stale snapshot{% else %}inside daily window{% endif %}</span></div>
   </div>
 
   <section class="card brief"><span class="eyebrow">Morning brief</span><p>{{ research.market_summary }}</p></section>
 
   <section>
-    <div class="toolbar"><div><h2>What matters today</h2><span class="muted">Verified root events and dated catalysts mapped to the stable narrative set.</span></div><span class="badge">{{ events|length }} events</span></div>
+    <div class="toolbar"><div><h2>What matters today</h2><span class="muted">Events require two independently retrieved cited URLs; duplicated coverage remains one origin.</span></div><span class="badge">{{ events|length }} events</span></div>
     <div class="grid events">
       {% for event in events %}<article class="card event"><div><span class="badge">{{ event.direction }}</span> <span class="badge">{{ event.horizon }}</span></div><h3 style="margin-top:9px">{{ event.title }}</h3><p class="impact">{{ event.why_it_matters }}</p><div class="chips">{% for name in event.narrative_names %}<span class="badge">{{ name }}</span>{% endfor %}</div>
-        <details><summary>{{ event.sources|length }} source roots</summary><ul>{% for source in event.sources %}<li><a href="{{ source.url }}">{{ source.title }}</a><span class="micro">{{ source.publisher }} · {{ source.published_at|date }} · {{ source.claim }}</span></li>{% endfor %}</ul></details>
+        <details><summary>{{ event.sources|length }} retrieved citations</summary><ul>{% for source in event.sources %}<li><a href="{{ source.url }}">{{ source.title }}</a><span class="micro">{{ source.publisher }} · {{ source.published_at|date }} · {{ source.claim }}</span></li>{% endfor %}</ul></details>
       </article>{% else %}<article class="card event"><h3>No verified market event</h3><p class="muted">The run did not manufacture a news story when the evidence gate was not met.</p></article>{% endfor %}
     </div>
   </section>
 
   <section class="card">
-    <div class="toolbar"><div><h2>Narrative Board</h2><span class="muted">The same broad narratives are measured every day; state and score change, membership does not drift silently.</span></div><span class="badge">{{ narratives|length }} stable narratives</span></div>
-    <div class="scroll"><table data-sortable><thead><tr><th>Rank</th><th>Narrative</th><th>State</th><th>Score</th><th>7d</th><th>BTC excess</th><th>Breadth</th><th>Fundamental growth</th><th>Attention</th><th>Coverage</th><th>Leading projects</th></tr></thead><tbody>
+    <div class="toolbar"><div><h2>Dynamic Narrative Radar</h2><span class="muted">Open-ended niche discovery with stable identities, explicit rejection reasons, and multi-day promotion.</span></div><span class="badge">max {{ dynamic_narratives|length }} observed</span></div>
+    <div class="scroll"><table data-sortable><thead><tr><th>State</th><th>Narrative / mechanism</th><th>Research priority</th><th>Persistence</th><th>7d / BTC excess</th><th>Breadth</th><th>Fundamental</th><th>Search / social</th><th>Evidence</th><th>Projects</th></tr></thead><tbody>
+      {% for item in dynamic_narratives %}<tr>
+        <td><span class="badge {{ item.state }}">{{ item.state }}</span></td>
+        <td class="name"><strong>{{ item.name }}</strong><span class="micro">{{ item.mechanism }}</span><details><summary>Thesis and limits</summary><p>{{ item.summary }}</p><p><strong>Catalyst:</strong> {{ item.catalyst }}</p><p><strong>Counter:</strong> {{ item.counter_thesis }}</p>{% if item.rejection_reasons %}<ul>{% for reason in item.rejection_reasons %}<li>{{ reason }}</li>{% endfor %}</ul>{% endif %}</details></td>
+        <td class="metric" data-value="{{ item.score }}">{{ item.score }}<span class="micro">uncalibrated · confidence {{ item.confidence }}</span><div class="meter"><span style="width:{{ item.score }}%"></span></div></td>
+        <td class="metric" data-value="{{ item.persistence_days }}">{{ item.persistence_days }}d<span class="micro">first {{ item.first_seen_at[:10] }}</span></td>
+        <td class="metric">{{ item.metrics.median_7d_pct|pct }}<span class="micro">BTC {{ item.metrics.btc_excess_7d_pct|pct }}</span></td>
+        <td class="metric">{{ item.metrics.breadth_vs_btc_pct|pct }}<span class="micro">{{ item.metrics.measured_asset_count }} measured</span></td>
+        <td class="metric">{{ item.metrics.fundamental_confirmation if item.metrics.fundamental_confirmation is not none else '—' }}<span class="micro">{{ item.metrics.protocol_metric_count }} rows</span></td>
+        <td class="metric">{{ item.metrics.search_attention }}<span class="micro">lexicon stance {{ item.metrics.social_sentiment if item.metrics.social_sentiment is not none else 'N/A' }}</span></td>
+        <td>{{ item.metrics.unique_evidence_roots }} supportive roots · {{ item.metrics.lane_count }} confirmed lanes<div class="chips">{% for lane in item.discovery_lanes %}<span class="badge">{{ lane }}</span>{% endfor %}</div><details><summary>Cited evidence</summary><ul>{% for source in item.sources %}<li><a href="{{ source.url }}">{{ source.title }}</a><span class="micro">{{ source.publisher }} · {{ source.published_at|date }} · {% if source.supports %}supports{% else %}contradicts{% endif %} · {{ source.claim }}</span></li>{% endfor %}</ul></details></td>
+        <td>{% for member in item.members %}<span class="badge">{{ member.symbol or member.asset_id }} {{ member.change_7d_pct|pct }}</span>{% if member.review %}<details><summary>{{ member.name or member.asset_id }} diligence</summary><span class="badge {{ member.review.verdict }}">{{ member.review.verdict }}</span>{% if member.review.quality %}<span class="micro">seriousness {{ member.review.quality.seriousness_score if member.review.quality.seriousness_score is not none else 'N/A' }} · coverage {{ member.review.quality.quality_coverage }}%</span>{% endif %}<p>{{ member.review.product_traction }}</p></details>{% endif %}{% else %}<span class="muted">No resolved asset</span>{% endfor %}</td>
+      </tr>{% else %}<tr><td colspan="10" class="muted">No dynamic candidates were verified in this run. Offline mode intentionally does not invent them.</td></tr>{% endfor %}
+    </tbody></table></div>
+  </section>
+
+  <section class="card">
+    <div class="toolbar"><div><h2>Stable Narrative Board / Market Map</h2><span class="muted">Fourteen durable parents provide coverage and comparisons; they do not bound discovery.</span></div><span class="badge">{{ narratives|length }} parents</span></div>
+    <div class="scroll"><table data-sortable><thead><tr><th>Rank</th><th>Parent narrative</th><th>State</th><th>Research priority</th><th>7d</th><th>BTC excess</th><th>Breadth</th><th>Fundamental</th><th>Search attention</th><th>Coverage</th><th>High-priority projects</th></tr></thead><tbody>
       {% for item in narratives %}<tr>
         <td class="metric" data-value="{{ item.rank }}"><span class="rank">{{ item.rank }}</span></td>
         <td class="name"><strong>{{ item.name }}</strong>{% if item.is_focus %} <span class="badge focus">focus</span>{% endif %}<span class="micro">{{ item.description }}</span></td>
         <td><span class="badge {{ item.state }}">{{ item.state }}</span>{% if item.previous_state and item.previous_state != item.state %}<span class="micro">from {{ item.previous_state }}</span>{% endif %}</td>
-        <td class="metric" data-value="{{ item.score }}">{{ item.score }}{% if item.score_delta is not none %}<span class="micro {% if item.score_delta > 0 %}positive{% elif item.score_delta < 0 %}negative{% endif %}">{{ item.score_delta|pct }} vs prior</span>{% endif %}<div class="meter"><span style="width:{{ item.score }}%"></span></div></td>
-        <td class="metric {% if item.metrics.median_7d_pct and item.metrics.median_7d_pct > 0 %}positive{% elif item.metrics.median_7d_pct and item.metrics.median_7d_pct < 0 %}negative{% endif %}" data-value="{{ item.metrics.median_7d_pct or -999 }}">{{ item.metrics.median_7d_pct|pct }}</td>
-        <td class="metric {% if item.metrics.btc_excess_7d_pct and item.metrics.btc_excess_7d_pct > 0 %}positive{% elif item.metrics.btc_excess_7d_pct and item.metrics.btc_excess_7d_pct < 0 %}negative{% endif %}" data-value="{{ item.metrics.btc_excess_7d_pct or -999 }}">{{ item.metrics.btc_excess_7d_pct|pct }}</td>
-        <td class="metric" data-value="{{ item.metrics.breadth_vs_btc_pct or -1 }}">{{ item.metrics.breadth_vs_btc_pct|pct }}<span class="micro">vs BTC</span></td>
-        <td class="metric" data-value="{{ item.metrics.fundamental_growth_score or -1 }}">{{ item.metrics.fundamental_growth_score or '—' }}<span class="micro">n={{ item.metrics.economic_metric_count }}</span></td>
-        <td class="metric" data-value="{{ item.metrics.attention_score }}">{{ item.metrics.attention_score }}<span class="micro">{{ item.metrics.trending_project_count }} trending</span></td>
+        <td class="metric" data-value="{{ item.score }}">{{ item.score }}{% if item.score_delta is not none %}<span class="micro {% if item.score_delta > 0 %}positive{% elif item.score_delta < 0 %}negative{% endif %}">{{ item.score_delta|pct }} vs prior day</span>{% endif %}<span class="micro">uncalibrated</span><div class="meter"><span style="width:{{ item.score }}%"></span></div></td>
+        <td class="metric">{{ item.metrics.median_7d_pct|pct }}</td><td class="metric">{{ item.metrics.btc_excess_7d_pct|pct }}</td><td class="metric">{{ item.metrics.breadth_vs_btc_pct|pct }}</td>
+        <td class="metric">{{ item.metrics.fundamental_growth_score if item.metrics.fundamental_growth_score is not none else '—' }}<span class="micro">n={{ item.metrics.economic_metric_count }}</span></td>
+        <td class="metric">{{ item.metrics.attention_score }}<span class="micro">{{ item.metrics.trending_project_count }} trending</span></td>
         <td class="metric">{{ item.metrics.measured_project_count }}/{{ item.metrics.project_count }}<span class="micro">confidence {{ item.confidence }}</span></td>
         <td>{% for project in item.top_projects %}<span class="badge">{{ project.name }} {{ project.score }}</span> {% else %}<span class="muted">No eligible project</span>{% endfor %}</td>
       </tr>{% endfor %}
     </tbody></table></div>
   </section>
 
-  {% if focus_narratives %}<section><h2>Focus narrative evidence</h2><div class="grid focus-grid">
-    {% for item in focus_narratives %}<article class="card focus-card"><span class="badge {{ item.state }}">#{{ item.rank }} {{ item.state }}</span><h3 style="margin-top:8px">{{ item.name }}</h3>
-      {% if item.update %}<div class="callout"><span class="eyebrow">Why now</span><div>{{ item.update.why_now }}</div></div><div class="callout risk"><span class="eyebrow">Counterpoint</span><div>{{ item.update.counterpoint }}</div></div>
-      <details><summary>{{ item.update.sources|length }} research sources</summary><ul>{% for source in item.update.sources %}<li><a href="{{ source.url }}">{{ source.title }}</a><span class="micro">{{ source.claim }}</span></li>{% endfor %}</ul></details>
-      {% else %}<div class="callout risk">No verified qualitative update; focus is quantitative only.</div>{% endif %}
-    </article>{% endfor %}
-  </div></section>{% endif %}
-
   <section class="card">
-    <div class="toolbar"><div><h2>Project Explorer</h2><span class="muted">Growth and traction first; size is a liquidity guardrail, not the ranking target.</span></div><span class="badge">research only · NO ACTION</span></div>
-    <div class="scroll"><table data-sortable><thead><tr><th>Narrative</th><th>Project</th><th>Score</th><th>7d</th><th>BTC excess</th><th>Acceleration</th><th>Cap / turnover</th><th>TVL 7d</th><th>Fees 7d growth</th><th>Revenue growth</th><th>DEX volume growth</th><th>Risk</th><th>Quality review</th></tr></thead><tbody>
+    <div class="toolbar"><div><h2>Project Explorer</h2><span class="muted">Growth, liquid-market proxies, and structured diligence are separate dimensions.</span></div><span class="badge">research only · NO ACTION</span></div>
+    <div class="scroll"><table data-sortable><thead><tr><th>Narrative</th><th>Project</th><th>Research priority</th><th>7d</th><th>BTC excess</th><th>Acceleration</th><th>Cap / turnover</th><th>TVL 7d</th><th>Fees growth</th><th>Revenue growth</th><th>DEX growth</th><th>Risk</th><th>Quality review</th></tr></thead><tbody>
       {% for item in project_candidates %}<tr>
         <td>{{ narrative_names[item.narrative_id] }}</td><td><strong>{{ item.name }}</strong><span class="micro">{{ item.asset_id }}</span></td>
-        <td class="metric" data-value="{{ item.score }}">{{ item.score }}{% if item.score_delta is not none %}<span class="micro">{{ item.score_delta|pct }} prior</span>{% endif %}</td>
-        <td class="metric {% if item.metrics.price_7d_pct and item.metrics.price_7d_pct > 0 %}positive{% elif item.metrics.price_7d_pct and item.metrics.price_7d_pct < 0 %}negative{% endif %}">{{ item.metrics.price_7d_pct|pct }}</td>
-        <td class="metric {% if item.metrics.btc_excess_7d_pct and item.metrics.btc_excess_7d_pct > 0 %}positive{% elif item.metrics.btc_excess_7d_pct and item.metrics.btc_excess_7d_pct < 0 %}negative{% endif %}">{{ item.metrics.btc_excess_7d_pct|pct }}</td>
-        <td class="metric">{{ item.metrics.price_acceleration|pct }}</td><td>{{ item.metrics.market_cap_usd|money }}<span class="micro">{{ item.metrics.turnover_24h|ratio }} · age {{ item.metrics.market_data_age_hours or '—' }}h</span></td>
-        <td class="metric">{{ item.metrics.tvl_growth_7d_pct|pct }}<span class="micro">{{ item.metrics.tvl_usd|money }}</span></td>
-        <td class="metric">{{ item.metrics.fees_growth_7d_pct|pct }}<span class="micro">{{ item.metrics.fees_7d_usd|money }}</span></td>
-        <td class="metric">{{ item.metrics.revenue_growth_7d_pct|pct }}</td><td class="metric">{{ item.metrics.dex_volume_growth_7d_pct|pct }}</td>
+        <td class="metric">{{ item.score }}</td><td class="metric">{{ item.metrics.price_7d_pct|pct }}</td><td class="metric">{{ item.metrics.btc_excess_7d_pct|pct }}</td><td class="metric">{{ item.metrics.price_acceleration|pct }}</td>
+        <td>{{ item.metrics.market_cap_usd|money }}<span class="micro">{{ item.metrics.turnover_24h|ratio }} · age {{ item.metrics.market_data_age_hours if item.metrics.market_data_age_hours is not none else '—' }}h</span></td>
+        <td class="metric">{{ item.metrics.tvl_growth_7d_pct|pct }}<span class="micro">{{ item.metrics.tvl_usd|money }}</span></td><td class="metric">{{ item.metrics.fees_growth_7d_pct|pct }}</td><td class="metric">{{ item.metrics.revenue_growth_7d_pct|pct }}</td><td class="metric">{{ item.metrics.dex_volume_growth_7d_pct|pct }}</td>
         <td class="metric {% if item.metrics.overheat_risk >= 65 %}negative{% elif item.metrics.overheat_risk >= 45 %}amber{% endif %}">{{ item.metrics.overheat_risk }}<span class="micro">overheat</span></td>
-        <td>{% if item.review %}<span class="badge {{ item.review.verdict }}">{{ item.review.verdict }}</span><details><summary>Evidence</summary><p><strong>Mission:</strong> {{ item.review.mission }}</p><p><strong>Team/backing:</strong> {{ item.review.team_and_backing }}</p><p><strong>Product:</strong> {{ item.review.product_traction }}</p><p><strong>Community:</strong> {{ item.review.community_quality }}</p><p><strong>Catalyst:</strong> {{ item.review.catalyst }}</p><ul>{% for risk in item.review.risks %}<li>{{ risk }}</li>{% endfor %}</ul><ul>{% for source in item.review.sources %}<li><a href="{{ source.url }}">{{ source.title }}</a></li>{% endfor %}</ul></details>{% else %}<span class="badge insufficient">unresearched</span>{% endif %}<span class="micro">{% for note in item.selection_notes %}{{ note }}{% if not loop.last %} · {% endif %}{% endfor %}</span></td>
+        <td>{% if item.review %}<span class="badge {{ item.review.verdict }}">{{ item.review.verdict }}</span>{% if item.review.quality %}<span class="micro">seriousness {{ item.review.quality.seriousness_score if item.review.quality.seriousness_score is not none else 'N/A' }} · coverage {{ item.review.quality.quality_coverage }}%</span><div class="chips">{% for key, dimension in item.review.quality.items() if dimension is mapping and dimension.status is defined %}<span class="badge {{ dimension.status }}">{{ key|replace('_',' ') }}</span>{% endfor %}</div>{% endif %}<details><summary>Evidence, unknowns, and flags</summary><p><strong>Team/backing:</strong> {{ item.review.team_and_backing }}</p><p><strong>Product:</strong> {{ item.review.product_traction }}</p><p><strong>Community:</strong> {{ item.review.community_quality }}</p><p><strong>Catalyst:</strong> {{ item.review.catalyst }}</p>{% if item.review.quality %}<ul>{% for value in item.review.quality.unknowns %}<li>Unknown: {{ value }}</li>{% endfor %}{% for value in item.review.quality.red_flags %}<li>Red flag: {{ value }}</li>{% endfor %}</ul>{% endif %}<ul>{% for risk in item.review.risks %}<li>{{ risk }}</li>{% endfor %}</ul></details>{% else %}<span class="badge insufficient">unresearched</span>{% endif %}<span class="micro">{% for note in item.selection_notes %}{{ note }}{% if not loop.last %} · {% endif %}{% endfor %}</span></td>
       </tr>{% else %}<tr><td colspan="13" class="muted">No project passed minimum market-data and liquidity coverage.</td></tr>{% endfor %}
     </tbody></table></div>
   </section>
 
+  <section class="card">
+    <div class="health"><div><h2>Social sample diagnostics</h2>{% if social_metrics %}{% for item in social_metrics %}<div class="run"><span><strong>{{ item.target_id }}</strong><span class="micro">{{ item.provider }} · {{ item.raw_posts }} returned posts · {{ item.unique_authors }} authors · {% if item.right_censored %}right-censored{% else %}below cap{% endif %}</span><span class="micro">{{ item.limitation }}</span></span><span><span class="badge {{ item.coverage }}">{{ item.coverage }}</span><span class="micro">lexicon stance {{ item.sentiment_score if item.sentiment_score is not none else 'N/A' }} · coordination {{ item.coordination_risk if item.coordination_risk is not none else 'N/A' }} · duplicates {{ item.duplicate_share if item.duplicate_share is not none else 'N/A' }}% · est. ${{ item.estimated_cost_usd if item.estimated_cost_usd is not none else 0 }}</span></span></div>{% endfor %}{% else %}<p class="muted">No social target was sampled. Search popularity is not being relabelled as sentiment.</p>{% endif %}</div>
+      <div><h2>Prospective Phase 2 readiness</h2><span class="badge">{{ paper_decision.readiness_state if paper_decision else 'BLOCKED' }}</span><p>{{ paper_decision.reason if paper_decision else 'Paper policy is not initialized.' }}</p><span class="micro">{{ forecast_cohort_count }} canonical research cohorts · {{ forecast_outcome_count }} fully priced horizon labels · no orders or paper fills</span></div></div>
+  </section>
+
   <section class="card{% if data_gaps %} alert{% endif %}"><div class="health"><div><h2>Known limits</h2><ul class="compact">{% for gap in data_gaps %}<li>{{ gap }}</li>{% endfor %}</ul></div><div><h2>Run ledger</h2>{% for item in run_history %}<div class="run"><span class="badge {{ item.status }}">{{ item.status }}</span><span>{{ item.as_of[:19] }}<span class="micro">{{ item.mode }} · {{ item.id }}</span></span></div>{% endfor %}</div></div></section>
 
-  <footer>Model {{ research.model }} · prompt {{ research.prompt_version }} · stable landscape score v3 · immutable run artifact · experimental research, not financial advice</footer>
+  <footer>Model {{ research.model }} · prompt {{ research.prompt_version }} · dynamic radar v1 · paper policy v1 · immutable run artifact · experimental research, not financial advice</footer>
 </main>
 <script>
   document.querySelectorAll('[data-sortable] th').forEach((header,index)=>header.addEventListener('click',()=>{const body=header.closest('table').querySelector('tbody');const rows=[...body.querySelectorAll('tr')];const direction=header.dataset.direction==='asc'?-1:1;rows.sort((a,b)=>{const av=a.children[index]?.dataset.value??a.children[index]?.innerText??'';const bv=b.children[index]?.dataset.value??b.children[index]?.innerText??'';return direction*(Number.isNaN(Number(av))?av.localeCompare(bv):Number(av)-Number(bv));});rows.forEach(row=>body.appendChild(row));header.dataset.direction=direction===1?'asc':'desc';}));

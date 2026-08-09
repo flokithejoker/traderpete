@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -17,6 +19,13 @@ def _load_dotenv(path: Path) -> None:
         os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     root_dir: Path
@@ -30,6 +39,10 @@ class Settings:
     openai_api_key: str | None = field(repr=False)
     coingecko_demo_api_key: str | None = field(repr=False)
     coingecko_pro_api_key: str | None = field(repr=False)
+    x_bearer_token: str | None = field(repr=False)
+    x_enabled: bool
+    x_max_queries: int
+    x_posts_per_query: int
 
     @classmethod
     def from_env(cls, root_dir: Path | None = None) -> Settings:
@@ -49,6 +62,13 @@ class Settings:
             openai_api_key=os.getenv("OPENAI_API_KEY") or None,
             coingecko_demo_api_key=os.getenv("COINGECKO_DEMO_API_KEY") or None,
             coingecko_pro_api_key=os.getenv("COINGECKO_PRO_API_KEY") or None,
+            x_bearer_token=os.getenv("X_BEARER_TOKEN") or None,
+            x_enabled=_env_bool("TRADER_PETE_X_ENABLED"),
+            x_max_queries=max(0, min(10, int(os.getenv("TRADER_PETE_X_MAX_QUERIES", "4")))),
+            x_posts_per_query=max(
+                10,
+                min(100, int(os.getenv("TRADER_PETE_X_POSTS_PER_QUERY", "20"))),
+            ),
         )
 
     def safe_dict(self) -> dict[str, object]:
@@ -63,4 +83,43 @@ class Settings:
             "currency": self.currency,
             "has_openai_key": bool(self.openai_api_key),
             "has_coingecko_key": bool(self.coingecko_demo_api_key or self.coingecko_pro_api_key),
+            "x_enabled": self.x_enabled,
+            "has_x_key": bool(self.x_bearer_token),
+            "x_max_queries": self.x_max_queries,
+            "x_posts_per_query": self.x_posts_per_query,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyPolicy:
+    version: str
+    policy_hash: str
+    minimum_prospective_days: int
+    maximum_open_positions: int
+    maximum_deployed_nav_pct: float
+    maximum_position_nav_pct: float
+    maximum_initial_risk_nav_pct: float
+    maximum_new_entries_per_rolling_7d: int
+    spot_only: bool
+    human_confirmation_required: bool
+    automatic_order_execution: bool
+    dynamic_entry_states: tuple[str, ...]
+
+    @classmethod
+    def load(cls, path: Path) -> StrategyPolicy:
+        raw = path.read_bytes()
+        data = json.loads(raw)
+        return cls(
+            version=str(data["version"]),
+            policy_hash=hashlib.sha256(raw).hexdigest(),
+            minimum_prospective_days=int(data["minimum_prospective_days"]),
+            maximum_open_positions=int(data["maximum_open_positions"]),
+            maximum_deployed_nav_pct=float(data["maximum_deployed_nav_pct"]),
+            maximum_position_nav_pct=float(data["maximum_position_nav_pct"]),
+            maximum_initial_risk_nav_pct=float(data["maximum_initial_risk_nav_pct"]),
+            maximum_new_entries_per_rolling_7d=int(data["maximum_new_entries_per_rolling_7d"]),
+            spot_only=bool(data["spot_only"]),
+            human_confirmation_required=bool(data["human_confirmation_required"]),
+            automatic_order_execution=bool(data["automatic_order_execution"]),
+            dynamic_entry_states=tuple(data["dynamic_entry_states"]),
+        )

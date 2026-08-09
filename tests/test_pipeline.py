@@ -23,6 +23,8 @@ def test_offline_pipeline_writes_ledger_and_self_contained_report(tmp_path: Path
     assert "Narrative Board" in html
     assert "What matters today" in html
     assert "Morning brief" in html
+    assert "Dynamic Narrative Radar" in html
+    assert "Prospective Phase 2" in html
     assert "Project Explorer" in html
     assert "NO ACTION" in html
     assert "OPENAI_API_KEY" not in html
@@ -43,11 +45,19 @@ def test_offline_pipeline_writes_ledger_and_self_contained_report(tmp_path: Path
         projects = connection.execute(
             "SELECT COUNT(*) FROM landscape_projects WHERE run_id = ?", (result.run_id,)
         ).fetchone()[0]
+        dynamic_runs = connection.execute(
+            "SELECT COUNT(*) FROM dynamic_research_runs WHERE run_id = ?", (result.run_id,)
+        ).fetchone()[0]
+        paper_decisions = connection.execute(
+            "SELECT COUNT(*) FROM paper_decisions WHERE run_id = ?", (result.run_id,)
+        ).fetchone()[0]
 
     assert run["status"] == "succeeded"
     assert artifact["sha256"] == hashlib.sha256(result.report_path.read_bytes()).hexdigest()
     assert narratives == 14
     assert projects >= 60
+    assert dynamic_runs == 1
+    assert paper_decisions == 1
 
 
 def test_same_day_runs_create_distinct_immutable_reports(tmp_path: Path) -> None:

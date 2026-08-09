@@ -5,7 +5,13 @@ from collections.abc import Callable
 from statistics import median
 from typing import Any
 
-from trader_pete.models import CategoryMarket, MarketAsset, MarketDataBundle, ProtocolMetric
+from trader_pete.models import (
+    CategoryMarket,
+    MarketAsset,
+    MarketDataBundle,
+    ProtocolActivityMetric,
+    ProtocolMetric,
+)
 
 
 def _number(value: float | None) -> float:
@@ -205,17 +211,43 @@ def _protocol_context(
     }
 
 
+def _activity_context(
+    metrics: list[ProtocolActivityMetric], limit: int
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    usable = [
+        item
+        for item in metrics
+        if item.total_7d_usd is not None
+        and item.total_7d_usd >= 10_000
+        and item.growth_7d_pct is not None
+        and abs(item.growth_7d_pct) <= 500
+    ]
+    ranked = sorted(
+        usable,
+        key=lambda item: (_number(item.growth_7d_pct), _number(item.total_7d_usd)),
+        reverse=True,
+    )[:limit]
+    return [item.model_dump(mode="json") for item in ranked], {
+        "raw": len(metrics),
+        "usable": len(usable),
+        "missing_7d_growth": sum(item.growth_7d_pct is None for item in metrics),
+        "tiny_or_outlier_excluded": len(metrics) - len(usable),
+    }
+
+
 def build_research_context(
     bundle: MarketDataBundle,
     *,
     asset_limit: int = 100,
     category_limit: int = 35,
     protocol_limit: int = 50,
+    activity_limit: int = 60,
 ) -> dict[str, object]:
     """Compile diversified, quality-screened discovery inputs without raw payloads."""
     assets = _asset_context(bundle, asset_limit)
     categories, category_quality = _category_context(bundle.categories, category_limit)
     protocols, protocol_quality = _protocol_context(bundle.protocols, protocol_limit)
+    activity, activity_quality = _activity_context(bundle.protocol_activity, activity_limit)
     trending = [item.model_dump(mode="json") for item in bundle.trending_assets]
 
     return {
@@ -224,23 +256,29 @@ def build_research_context(
         "assets": assets,
         "categories": categories,
         "protocols": protocols,
+        "protocol_activity": activity,
         "trending_searches": trending,
         "coverage": {
             "asset_count": len(bundle.assets),
             "category_count": len(bundle.categories),
             "protocol_count": len(bundle.protocols),
+            "protocol_activity_count": len(bundle.protocol_activity),
             "trending_count": len(bundle.trending_assets),
             "context_asset_count": len(assets),
             "context_category_count": len(categories),
             "context_protocol_count": len(protocols),
+            "context_protocol_activity_count": len(activity),
         },
         "data_quality": {
             "categories": category_quality,
             "protocols": protocol_quality,
+            "protocol_activity": activity_quality,
             "warnings": [
                 "CoinGecko trending measures search popularity, not organic sentiment or returns.",
                 "Category changes are discovery hints and may reflect membership changes.",
                 "Protocol TVL changes are not net USD inflows and include asset-price effects.",
+                "Fees, revenue, and volume growth are protocol-specific activity signals, "
+                "not token value capture.",
                 "Attention history is unavailable until multiple daily snapshots accumulate.",
             ],
         },
@@ -248,6 +286,7 @@ def build_research_context(
             "price_and_volume": "CoinGecko point-in-time market snapshot",
             "trending_searches": "CoinGecko search popularity over the last 24 hours",
             "protocol_growth": "DefiLlama TVL change; not flow-adjusted",
+            "protocol_activity": "DefiLlama fees, revenue, and DEX-volume snapshots",
             "news_and_events": "OpenAI web search; source roots must be reported and verified",
         },
     }

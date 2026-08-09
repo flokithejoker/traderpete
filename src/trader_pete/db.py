@@ -6,20 +6,24 @@ import sqlite3
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
+from statistics import median
 from typing import Any
 
+from trader_pete.config import StrategyPolicy
 from trader_pete.models import (
     CategoryMarket,
     DailyLandscapeResearch,
     DailyNarrativeResearch,
+    DynamicRadarSnapshot,
     LandscapeSnapshot,
     MarketAsset,
     ProtocolActivityMetric,
     ProtocolMetric,
     RunMode,
     RunStatus,
+    SocialWindowMetrics,
     TrendingAsset,
 )
 
@@ -221,6 +225,108 @@ CREATE TABLE IF NOT EXISTS market_events (
     PRIMARY KEY (run_id, event_index)
 );
 
+CREATE TABLE IF NOT EXISTS dynamic_research_runs (
+    run_id TEXT PRIMARY KEY REFERENCES runs(id),
+    model TEXT NOT NULL,
+    reasoning_effort TEXT NOT NULL,
+    prompt_version TEXT NOT NULL,
+    prompt_hash TEXT NOT NULL,
+    response_id TEXT,
+    data_gaps_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS dynamic_narratives (
+    run_id TEXT NOT NULL REFERENCES runs(id),
+    narrative_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    mechanism TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    parent_narrative_ids_json TEXT NOT NULL,
+    aliases_json TEXT NOT NULL,
+    state TEXT NOT NULL,
+    score REAL NOT NULL,
+    confidence REAL NOT NULL,
+    persistence_days INTEGER NOT NULL,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    catalyst TEXT NOT NULL,
+    counter_thesis TEXT NOT NULL,
+    protocol_ids_json TEXT NOT NULL,
+    discovery_lanes_json TEXT NOT NULL,
+    rejection_reasons_json TEXT NOT NULL,
+    metrics_json TEXT NOT NULL,
+    sources_json TEXT NOT NULL,
+    PRIMARY KEY (run_id, narrative_id)
+);
+
+CREATE TABLE IF NOT EXISTS dynamic_narrative_memberships (
+    run_id TEXT NOT NULL,
+    narrative_id TEXT NOT NULL,
+    asset_id TEXT NOT NULL,
+    review_json TEXT,
+    PRIMARY KEY (run_id, narrative_id, asset_id),
+    FOREIGN KEY (run_id, narrative_id)
+        REFERENCES dynamic_narratives(run_id, narrative_id)
+);
+
+CREATE TABLE IF NOT EXISTS social_window_metrics (
+    run_id TEXT NOT NULL REFERENCES runs(id),
+    provider TEXT NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    metrics_json TEXT NOT NULL,
+    PRIMARY KEY (run_id, provider, target_type, target_id)
+);
+
+CREATE TABLE IF NOT EXISTS forecast_cohorts (
+    run_id TEXT NOT NULL REFERENCES runs(id),
+    narrative_id TEXT NOT NULL,
+    strategy_version TEXT NOT NULL,
+    eligible INTEGER NOT NULL,
+    decision_state TEXT NOT NULL,
+    asset_ids_json TEXT NOT NULL,
+    entry_prices_json TEXT NOT NULL,
+    btc_entry_price REAL,
+    created_at TEXT NOT NULL,
+    decision_date TEXT NOT NULL DEFAULT '',
+    run_mode TEXT NOT NULL DEFAULT 'live',
+    policy_hash TEXT NOT NULL DEFAULT '',
+    is_canonical INTEGER NOT NULL DEFAULT 0,
+    narrative_gate_passed INTEGER NOT NULL DEFAULT 0,
+    paper_trade_eligible INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (run_id, narrative_id)
+);
+
+CREATE TABLE IF NOT EXISTS forecast_outcomes (
+    cohort_run_id TEXT NOT NULL,
+    narrative_id TEXT NOT NULL,
+    horizon_days INTEGER NOT NULL,
+    observation_run_id TEXT NOT NULL REFERENCES runs(id),
+    observed_at TEXT NOT NULL,
+    median_return_pct REAL,
+    btc_return_pct REAL,
+    btc_excess_pct REAL,
+    status TEXT NOT NULL DEFAULT 'priced',
+    expected_asset_count INTEGER NOT NULL DEFAULT 0,
+    priced_asset_count INTEGER NOT NULL DEFAULT 0,
+    missing_asset_ids_json TEXT NOT NULL DEFAULT '[]',
+    PRIMARY KEY (cohort_run_id, narrative_id, horizon_days),
+    FOREIGN KEY (cohort_run_id, narrative_id)
+        REFERENCES forecast_cohorts(run_id, narrative_id)
+);
+
+CREATE TABLE IF NOT EXISTS paper_decisions (
+    run_id TEXT PRIMARY KEY REFERENCES runs(id),
+    policy_version TEXT NOT NULL,
+    action TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    prospective_days INTEGER NOT NULL,
+    qualified_narrative_count INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    readiness_state TEXT NOT NULL DEFAULT 'BLOCKED_INSUFFICIENT_HISTORY',
+    policy_hash TEXT NOT NULL DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS dashboard_artifacts (
     run_id TEXT PRIMARY KEY REFERENCES runs(id),
     path TEXT NOT NULL,
@@ -283,13 +389,39 @@ class Database:
             "research_runs": {
                 "market_summary": "TEXT NOT NULL DEFAULT ''",
             },
+            "forecast_cohorts": {
+                "decision_date": "TEXT NOT NULL DEFAULT ''",
+                "run_mode": "TEXT NOT NULL DEFAULT 'live'",
+                "policy_hash": "TEXT NOT NULL DEFAULT ''",
+                "is_canonical": "INTEGER NOT NULL DEFAULT 0",
+                "narrative_gate_passed": "INTEGER NOT NULL DEFAULT 0",
+                "paper_trade_eligible": "INTEGER NOT NULL DEFAULT 0",
+            },
+            "forecast_outcomes": {
+                "status": "TEXT NOT NULL DEFAULT 'priced'",
+                "expected_asset_count": "INTEGER NOT NULL DEFAULT 0",
+                "priced_asset_count": "INTEGER NOT NULL DEFAULT 0",
+                "missing_asset_ids_json": "TEXT NOT NULL DEFAULT '[]'",
+            },
+            "paper_decisions": {
+                "readiness_state": ("TEXT NOT NULL DEFAULT 'BLOCKED_INSUFFICIENT_HISTORY'"),
+                "policy_hash": "TEXT NOT NULL DEFAULT ''",
+            },
         }
         for table, columns in additions.items():
             existing = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})")}
             for column, definition in columns.items():
                 if column not in existing:
                     connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
-        connection.execute("PRAGMA user_version = 3")
+        connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_canonical_forecast_cohort
+            ON forecast_cohorts (
+                strategy_version, run_mode, decision_date, narrative_id
+            ) WHERE is_canonical = 1
+            """
+        )
+        connection.execute("PRAGMA user_version = 5")
 
     def create_run(self, *, as_of: datetime, mode: RunMode, config: dict[str, object]) -> str:
         run_id = f"{as_of.strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
@@ -561,6 +693,439 @@ class Database:
                     for index, item in enumerate(result.key_events, 1)
                 ],
             )
+
+    def dynamic_history(self, prompt_version: str | None = None) -> list[dict[str, Any]]:
+        """Return prior successful dynamic observations, newest first, for identity resolution."""
+        with self.connect() as connection:
+            where_version = " AND dr.prompt_version = ?" if prompt_version else ""
+            parameters = (prompt_version,) if prompt_version else ()
+            rows = connection.execute(
+                f"""
+                SELECT d.*, r.as_of AS observation_as_of, r.mode
+                FROM dynamic_narratives d
+                JOIN runs r ON r.id = d.run_id
+                JOIN dynamic_research_runs dr ON dr.run_id = d.run_id
+                WHERE r.status = 'succeeded'
+                {where_version}
+                ORDER BY r.started_at DESC
+                """,
+                parameters,
+            ).fetchall()
+            memberships = connection.execute(
+                f"""
+                SELECT m.run_id, m.narrative_id, m.asset_id
+                FROM dynamic_narrative_memberships m
+                JOIN runs r ON r.id = m.run_id
+                JOIN dynamic_research_runs dr ON dr.run_id = m.run_id
+                WHERE r.status = 'succeeded'
+                {where_version}
+                """,
+                parameters,
+            ).fetchall()
+        members: dict[tuple[str, str], list[str]] = {}
+        for row in memberships:
+            members.setdefault((row["run_id"], row["narrative_id"]), []).append(row["asset_id"])
+        result = []
+        seen_daily: set[tuple[str, str, str]] = set()
+        for raw in rows:
+            row = dict(raw)
+            daily_key = (
+                row["mode"],
+                row["observation_as_of"][:10],
+                row["narrative_id"],
+            )
+            if daily_key in seen_daily:
+                continue
+            seen_daily.add(daily_key)
+            row["aliases"] = json.loads(row["aliases_json"])
+            row["constituent_ids"] = members.get((row["run_id"], row["narrative_id"]), [])
+            row["parent_narrative_ids"] = json.loads(row["parent_narrative_ids_json"])
+            row["protocol_ids"] = json.loads(row["protocol_ids_json"])
+            row["discovery_lanes"] = json.loads(row["discovery_lanes_json"])
+            row["rejection_reasons"] = json.loads(row["rejection_reasons_json"])
+            row["metrics"] = json.loads(row["metrics_json"])
+            row["sources"] = json.loads(row["sources_json"])
+            row["as_of"] = row["last_seen_at"]
+            result.append(row)
+        return result
+
+    def store_dynamic_research(
+        self,
+        *,
+        run_id: str,
+        radar: DynamicRadarSnapshot,
+        result: DailyLandscapeResearch,
+        social_metrics: list[SocialWindowMetrics],
+        model: str,
+        reasoning_effort: str,
+        prompt_version: str,
+        prompt: str,
+        response_id: str | None,
+        policy: StrategyPolicy,
+        run_mode: RunMode,
+    ) -> None:
+        dynamic_ids = {item.narrative_id for item in radar.narratives}
+        reviews = {
+            (item.narrative_id, item.project_id): item
+            for item in result.project_reviews
+            if item.narrative_id in dynamic_ids
+        }
+        strategy_hash = content_hash(
+            {"policy_hash": policy.policy_hash, "dynamic_prompt_version": prompt_version}
+        )
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO dynamic_research_runs (
+                    run_id, model, reasoning_effort, prompt_version, prompt_hash,
+                    response_id, data_gaps_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    model,
+                    reasoning_effort,
+                    prompt_version,
+                    content_hash(prompt),
+                    response_id,
+                    canonical_json(radar.data_gaps),
+                ),
+            )
+            connection.executemany(
+                """
+                INSERT INTO dynamic_narratives (
+                    run_id, narrative_id, name, mechanism, summary,
+                    parent_narrative_ids_json, aliases_json, state, score,
+                    confidence, persistence_days, first_seen_at, last_seen_at,
+                    catalyst, counter_thesis, protocol_ids_json,
+                    discovery_lanes_json, rejection_reasons_json, metrics_json,
+                    sources_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        run_id,
+                        item.narrative_id,
+                        item.name,
+                        item.mechanism,
+                        item.summary,
+                        canonical_json(item.parent_narrative_ids),
+                        canonical_json(item.aliases),
+                        item.state.value,
+                        item.score,
+                        item.confidence,
+                        item.persistence_days,
+                        item.first_seen_at.astimezone(UTC).isoformat(),
+                        item.last_seen_at.astimezone(UTC).isoformat(),
+                        item.catalyst,
+                        item.counter_thesis,
+                        canonical_json(item.protocol_ids),
+                        canonical_json(item.discovery_lanes),
+                        canonical_json(item.rejection_reasons),
+                        canonical_json(item.metrics.model_dump(mode="json")),
+                        canonical_json([source.model_dump(mode="json") for source in item.sources]),
+                    )
+                    for item in radar.narratives
+                ],
+            )
+            connection.executemany(
+                """
+                INSERT INTO dynamic_narrative_memberships (
+                    run_id, narrative_id, asset_id, review_json
+                ) VALUES (?, ?, ?, ?)
+                """,
+                [
+                    (
+                        run_id,
+                        item.narrative_id,
+                        asset_id,
+                        canonical_json(
+                            reviews[(item.narrative_id, asset_id)].model_dump(mode="json")
+                        )
+                        if (item.narrative_id, asset_id) in reviews
+                        else None,
+                    )
+                    for item in radar.narratives
+                    for asset_id in item.constituent_ids
+                ],
+            )
+            connection.executemany(
+                """
+                INSERT INTO social_window_metrics (
+                    run_id, provider, target_type, target_id, metrics_json
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        run_id,
+                        item.provider,
+                        item.target_type,
+                        item.target_id,
+                        canonical_json(item.model_dump(mode="json")),
+                    )
+                    for item in social_metrics
+                ],
+            )
+            prior_dates = {
+                row[0]
+                for row in connection.execute(
+                    """
+                    SELECT DISTINCT decision_date
+                    FROM forecast_cohorts
+                    WHERE is_canonical = 1 AND run_mode = 'live' AND policy_hash = ?
+                    """,
+                    (strategy_hash,),
+                )
+            }
+            if run_mode is RunMode.LIVE:
+                prior_dates.add(radar.as_of.date().isoformat())
+            history_days = 0
+            cursor = radar.as_of.date()
+            while cursor.isoformat() in prior_dates:
+                history_days += 1
+                cursor = date.fromordinal(cursor.toordinal() - 1)
+            connection.executemany(
+                """
+                INSERT INTO forecast_cohorts (
+                    run_id, narrative_id, strategy_version, eligible,
+                    decision_state, asset_ids_json, entry_prices_json,
+                    btc_entry_price, created_at, decision_date, run_mode,
+                    policy_hash, is_canonical, narrative_gate_passed,
+                    paper_trade_eligible
+                ) VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 0)
+                """,
+                [
+                    (
+                        run_id,
+                        item.narrative_id,
+                        policy.version,
+                        (
+                            "research_qualified_after_burn_in"
+                            if history_days >= policy.minimum_prospective_days
+                            and item.state.value in policy.dynamic_entry_states
+                            else (
+                                "insufficient_history"
+                                if history_days < policy.minimum_prospective_days
+                                else "research_only"
+                            )
+                        ),
+                        canonical_json(item.constituent_ids),
+                        canonical_json(
+                            self._reference_prices(connection, run_id, item.constituent_ids)
+                        ),
+                        self._reference_prices(connection, run_id, ["bitcoin"]).get("bitcoin"),
+                        radar.as_of.astimezone(UTC).isoformat(),
+                        radar.as_of.date().isoformat(),
+                        run_mode.value,
+                        strategy_hash,
+                        int(
+                            history_days >= policy.minimum_prospective_days
+                            and item.state.value in policy.dynamic_entry_states
+                        ),
+                    )
+                    for item in radar.narratives
+                ],
+            )
+            qualified = sum(
+                item.state.value in policy.dynamic_entry_states for item in radar.narratives
+            )
+            if run_mode is not RunMode.LIVE:
+                readiness = "BLOCKED_OFFLINE_OBSERVATION"
+                reason = "Offline observations do not count toward the live prospective burn-in."
+            elif history_days < policy.minimum_prospective_days:
+                readiness = "BLOCKED_INSUFFICIENT_HISTORY"
+                reason = (
+                    f"Live canonical history is {history_days}/"
+                    f"{policy.minimum_prospective_days} consecutive days."
+                )
+            elif qualified:
+                readiness = "BLOCKED_INVESTABILITY_NOT_IMPLEMENTED"
+                reason = (
+                    "A narrative is research-qualified, but venue, cost, unlock, contract, "
+                    "and security gates are not implemented."
+                )
+            else:
+                readiness = "NO_RESEARCH_QUALIFIED_NARRATIVE"
+                reason = "No dynamic narrative passed the research-promotion gate."
+            connection.execute(
+                """
+                INSERT INTO paper_decisions (
+                    run_id, policy_version, action, reason, prospective_days,
+                    qualified_narrative_count, created_at, readiness_state,
+                    policy_hash
+                ) VALUES (?, ?, 'NO_ACTION', ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    policy.version,
+                    reason,
+                    history_days,
+                    qualified,
+                    datetime.now(UTC).isoformat(),
+                    readiness,
+                    strategy_hash,
+                ),
+            )
+
+    @staticmethod
+    def _reference_prices(
+        connection: sqlite3.Connection,
+        run_id: str,
+        asset_ids: list[str],
+    ) -> dict[str, float]:
+        if not asset_ids:
+            return {}
+        placeholders = ",".join("?" for _ in asset_ids)
+        rows = connection.execute(
+            f"""
+            SELECT asset_id, price_usd FROM market_snapshots
+            WHERE run_id = ? AND asset_id IN ({placeholders}) AND price_usd IS NOT NULL
+            """,
+            (run_id, *asset_ids),
+        ).fetchall()
+        return {row["asset_id"]: float(row["price_usd"]) for row in rows}
+
+    def finalize_canonical_cohorts(self, run_id: str) -> None:
+        """Select at most one successful cohort per policy, mode, date, and narrative."""
+        with self.connect() as connection:
+            run = connection.execute("SELECT status FROM runs WHERE id = ?", (run_id,)).fetchone()
+            if run is None or run["status"] != RunStatus.SUCCEEDED.value:
+                raise ValueError("Canonical cohorts require a succeeded run.")
+            self._finalize_canonical_cohorts(connection, run_id)
+
+    @staticmethod
+    def _finalize_canonical_cohorts(
+        connection: sqlite3.Connection,
+        run_id: str,
+    ) -> None:
+        connection.execute(
+            """
+            UPDATE forecast_cohorts AS current
+            SET is_canonical = 1
+            WHERE current.run_id = ?
+              AND NOT EXISTS (
+                SELECT 1
+                FROM forecast_cohorts prior
+                JOIN runs prior_run ON prior_run.id = prior.run_id
+                WHERE prior.is_canonical = 1
+                  AND prior_run.status = 'succeeded'
+                  AND prior.strategy_version = current.strategy_version
+                  AND prior.run_mode = current.run_mode
+                  AND prior.decision_date = current.decision_date
+                  AND prior.narrative_id = current.narrative_id
+              )
+            """,
+            (run_id,),
+        )
+
+    def record_forecast_outcomes(
+        self,
+        *,
+        observation_run_id: str,
+        observed_at: datetime,
+        assets: list[MarketAsset],
+    ) -> None:
+        current_prices = {
+            item.asset_id: float(item.price_usd) for item in assets if item.price_usd is not None
+        }
+        with self.connect() as connection:
+            observation = connection.execute(
+                "SELECT status FROM runs WHERE id = ?", (observation_run_id,)
+            ).fetchone()
+            if observation is None or observation["status"] != RunStatus.SUCCEEDED.value:
+                raise ValueError("Forecast outcomes require a succeeded observation run.")
+            cohorts = connection.execute(
+                """
+                SELECT c.*, r.as_of
+                FROM forecast_cohorts c JOIN runs r ON r.id = c.run_id
+                WHERE c.is_canonical = 1 AND r.status = 'succeeded'
+                ORDER BY r.as_of
+                """
+            ).fetchall()
+            for cohort in cohorts:
+                created_at = datetime.fromisoformat(cohort["as_of"].replace("Z", "+00:00"))
+                age_days = (observed_at - created_at).total_seconds() / 86_400
+                reference_prices = json.loads(cohort["entry_prices_json"])
+                expected_ids = json.loads(cohort["asset_ids_json"])
+                for horizon in (7, 28):
+                    if age_days < horizon:
+                        continue
+                    existing = connection.execute(
+                        """
+                        SELECT 1 FROM forecast_outcomes
+                        WHERE cohort_run_id = ? AND narrative_id = ? AND horizon_days = ?
+                        """,
+                        (cohort["run_id"], cohort["narrative_id"], horizon),
+                    ).fetchone()
+                    if existing:
+                        continue
+                    missing_ids = [
+                        asset_id
+                        for asset_id in expected_ids
+                        if asset_id not in current_prices or asset_id not in reference_prices
+                    ]
+                    if missing_ids and age_days <= horizon + 1.5:
+                        continue
+                    status = "priced"
+                    if age_days > horizon + 1.5:
+                        status = "missed_window"
+                    elif missing_ids:
+                        status = "incomplete_coverage"
+                    returns = [
+                        (current_prices[asset_id] / float(reference_prices[asset_id]) - 1) * 100
+                        for asset_id in expected_ids
+                        if asset_id in current_prices
+                        and asset_id in reference_prices
+                        and float(reference_prices[asset_id]) > 0
+                    ]
+                    full_coverage = len(returns) == len(expected_ids) and bool(expected_ids)
+                    median_return = (
+                        round(float(median(returns)), 2)
+                        if status == "priced" and full_coverage
+                        else None
+                    )
+                    btc_return = None
+                    if (
+                        status == "priced"
+                        and cohort["btc_entry_price"]
+                        and current_prices.get("bitcoin")
+                    ):
+                        btc_return = round(
+                            (current_prices["bitcoin"] / float(cohort["btc_entry_price"]) - 1)
+                            * 100,
+                            2,
+                        )
+                    excess = (
+                        round(median_return - btc_return, 2)
+                        if median_return is not None and btc_return is not None
+                        else None
+                    )
+                    connection.execute(
+                        """
+                        INSERT OR IGNORE INTO forecast_outcomes (
+                            cohort_run_id, narrative_id, horizon_days,
+                            observation_run_id, observed_at, median_return_pct,
+                            btc_return_pct, btc_excess_pct, status,
+                            expected_asset_count, priced_asset_count,
+                            missing_asset_ids_json
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            cohort["run_id"],
+                            cohort["narrative_id"],
+                            horizon,
+                            observation_run_id,
+                            observed_at.astimezone(UTC).isoformat(),
+                            median_return,
+                            btc_return,
+                            excess,
+                            status,
+                            len(expected_ids),
+                            len(returns),
+                            canonical_json(missing_ids),
+                        ),
+                    )
+            self._finalize_canonical_cohorts(connection, observation_run_id)
 
     def store_market_assets(self, run_id: str, assets: list[MarketAsset]) -> None:
         with self.connect() as connection:
@@ -834,6 +1399,41 @@ class Database:
                 "SELECT COUNT(*) FROM protocol_activity_snapshots WHERE run_id = ?",
                 (run_id,),
             ).fetchone()[0]
+            dynamic_narratives = connection.execute(
+                "SELECT * FROM dynamic_narratives WHERE run_id = ? ORDER BY score DESC",
+                (run_id,),
+            ).fetchall()
+            dynamic_research = connection.execute(
+                "SELECT * FROM dynamic_research_runs WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            dynamic_memberships = connection.execute(
+                """
+                SELECT m.narrative_id, m.asset_id, m.review_json,
+                       s.name, s.symbol, s.price_usd, s.market_cap_usd,
+                       s.volume_24h_usd, s.change_7d_pct, s.change_30d_pct
+                FROM dynamic_narrative_memberships m
+                LEFT JOIN market_snapshots s
+                  ON s.run_id = m.run_id AND s.asset_id = m.asset_id
+                WHERE m.run_id = ?
+                ORDER BY m.narrative_id, s.market_cap_usd DESC
+                """,
+                (run_id,),
+            ).fetchall()
+            social = connection.execute(
+                "SELECT * FROM social_window_metrics WHERE run_id = ?",
+                (run_id,),
+            ).fetchall()
+            paper_decision = connection.execute(
+                "SELECT * FROM paper_decisions WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            cohort_count = connection.execute(
+                "SELECT COUNT(*) FROM forecast_cohorts WHERE is_canonical = 1",
+            ).fetchone()[0]
+            outcome_count = connection.execute(
+                "SELECT COUNT(*) FROM forecast_outcomes WHERE status = 'priced'",
+            ).fetchone()[0]
             run_history = connection.execute(
                 """
                 SELECT id, as_of, mode, status, started_at, completed_at, error
@@ -845,12 +1445,13 @@ class Database:
                 SELECT r.id
                 FROM runs r
                 JOIN landscape_narratives n ON n.run_id = r.id
-                WHERE r.started_at < ? AND r.status = 'succeeded' AND r.mode = ?
+                WHERE substr(r.as_of, 1, 10) < substr(?, 1, 10)
+                  AND r.status = 'succeeded' AND r.mode = ?
                 GROUP BY r.id
                 ORDER BY r.started_at DESC
                 LIMIT 1
                 """,
-                (run["started_at"], run["mode"]),
+                (run["as_of"], run["mode"]),
             ).fetchone()
             previous_narratives = []
             previous_projects = []
@@ -876,6 +1477,13 @@ class Database:
             "assets": [dict(row) for row in assets],
             "trending": [dict(row) for row in trending],
             "protocol_activity_count": int(activity_count),
+            "dynamic_narratives": [dict(row) for row in dynamic_narratives],
+            "dynamic_research": dict(dynamic_research) if dynamic_research else None,
+            "dynamic_memberships": [dict(row) for row in dynamic_memberships],
+            "social_metrics": [dict(row) for row in social],
+            "paper_decision": dict(paper_decision) if paper_decision else None,
+            "forecast_cohort_count": int(cohort_count),
+            "forecast_outcome_count": int(outcome_count),
             "run_history": [dict(row) for row in run_history],
             "previous_run_id": previous["id"] if previous else None,
             "previous_narratives": [dict(row) for row in previous_narratives],

@@ -42,6 +42,30 @@ class ProjectVerdict(StrEnum):
     INSUFFICIENT = "insufficient"
 
 
+class EvidenceStatus(StrEnum):
+    STRONG = "strong"
+    MIXED = "mixed"
+    WEAK = "weak"
+    UNKNOWN = "unknown"
+
+
+class DynamicNarrativeState(StrEnum):
+    FIRST_SEEN = "first_seen"
+    OBSERVED = "observed"
+    EMERGING = "emerging"
+    ACCELERATING = "accelerating"
+    CROWDED = "crowded"
+    FADING = "fading"
+    DORMANT = "dormant"
+    REJECTED = "rejected"
+
+
+class SocialCoverage(StrEnum):
+    UNAVAILABLE = "unavailable"
+    PARTIAL = "partial"
+    MEASURED = "measured"
+
+
 class NarrativeLifecycle(StrEnum):
     SEED = "seed"
     NASCENT = "nascent"
@@ -68,14 +92,14 @@ class EvidenceSource(FrozenModel):
     @field_validator("url")
     @classmethod
     def validate_http_url(cls, value: str) -> str:
-        if not value.startswith(("https://", "http://")):
+        if not value.startswith(("https://", "http://", "input://trader-pete/")):
             raise ValueError("Source URL must use http or https.")
         return value
 
     @field_validator("root_url")
     @classmethod
     def validate_root_url(cls, value: str) -> str:
-        if value and not value.startswith(("https://", "http://")):
+        if value and not value.startswith(("https://", "http://", "input://trader-pete/")):
             raise ValueError("Root source URL must be empty or use http or https.")
         return value
 
@@ -278,6 +302,100 @@ class StableNarrativeSnapshot(FrozenModel):
     metrics: NarrativeMetrics
 
 
+class DynamicNarrativeDraft(FrozenModel):
+    name: str
+    mechanism: str
+    summary: str
+    parent_narrative_ids: list[str] = Field(default_factory=list)
+    constituent_ids: list[str] = Field(default_factory=list)
+    protocol_ids: list[str] = Field(default_factory=list)
+    discovery_lanes: list[str] = Field(default_factory=list)
+    catalyst: str
+    counter_thesis: str
+    aliases: list[str] = Field(default_factory=list)
+    sources: list[EvidenceSource] = Field(default_factory=list)
+
+
+class DailyDynamicNarrativeDraft(FrozenModel):
+    as_of: datetime
+    candidates: list[DynamicNarrativeDraft] = Field(default_factory=list, max_length=12)
+    data_gaps: list[str] = Field(default_factory=list)
+
+
+class DynamicNarrativeMetrics(FrozenModel):
+    median_7d_pct: float | None = None
+    median_30d_pct: float | None = None
+    btc_excess_7d_pct: float | None = None
+    breadth_vs_btc_pct: float | None = None
+    market_confirmation: float = Field(ge=0, le=100)
+    fundamental_confirmation: float | None = Field(default=None, ge=0, le=100)
+    search_attention: float | None = Field(default=None, ge=0, le=100)
+    social_sentiment: float | None = Field(default=None, ge=-100, le=100)
+    coordination_risk: float | None = Field(default=None, ge=0, le=100)
+    evidence_quality: float = Field(ge=0, le=100)
+    overheat_risk: float = Field(ge=0, le=100)
+    measured_asset_count: int = Field(ge=0)
+    protocol_metric_count: int = Field(ge=0)
+    trending_asset_count: int = Field(ge=0)
+    unique_evidence_roots: int = Field(ge=0)
+    lane_count: int = Field(ge=0)
+
+
+class DynamicNarrativeSnapshot(FrozenModel):
+    narrative_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    name: str
+    mechanism: str
+    summary: str
+    parent_narrative_ids: list[str] = Field(default_factory=list)
+    aliases: list[str] = Field(default_factory=list)
+    state: DynamicNarrativeState
+    score: float = Field(ge=0, le=100)
+    confidence: float = Field(ge=0, le=100)
+    persistence_days: int = Field(ge=1)
+    first_seen_at: datetime
+    last_seen_at: datetime
+    catalyst: str
+    counter_thesis: str
+    constituent_ids: list[str] = Field(default_factory=list)
+    protocol_ids: list[str] = Field(default_factory=list)
+    discovery_lanes: list[str] = Field(default_factory=list)
+    rejection_reasons: list[str] = Field(default_factory=list)
+    metrics: DynamicNarrativeMetrics
+    sources: list[EvidenceSource] = Field(default_factory=list)
+
+
+class DynamicRadarSnapshot(FrozenModel):
+    as_of: datetime
+    narratives: list[DynamicNarrativeSnapshot] = Field(default_factory=list)
+    data_gaps: list[str] = Field(default_factory=list)
+
+
+class SocialWindowMetrics(FrozenModel):
+    provider: str
+    target_type: str
+    target_id: str
+    coverage: SocialCoverage
+    window_hours: int = Field(default=24, ge=1)
+    observed_at: datetime | None = None
+    window_start_at: datetime | None = None
+    window_end_at: datetime | None = None
+    right_censored: bool = False
+    estimated_cost_usd: float | None = Field(default=None, ge=0)
+    raw_posts: int = Field(default=0, ge=0)
+    unique_authors: int = Field(default=0, ge=0)
+    original_posts: int = Field(default=0, ge=0)
+    duplicate_share: float | None = Field(default=None, ge=0, le=100)
+    repost_share: float | None = Field(default=None, ge=0, le=100)
+    author_concentration: float | None = Field(default=None, ge=0, le=100)
+    source_entropy: float | None = Field(default=None, ge=0, le=100)
+    timing_burstiness: float | None = Field(default=None, ge=0, le=100)
+    coordination_risk: float | None = Field(default=None, ge=0, le=100)
+    positive_share: float | None = Field(default=None, ge=0, le=100)
+    negative_share: float | None = Field(default=None, ge=0, le=100)
+    sentiment_score: float | None = Field(default=None, ge=-100, le=100)
+    limitation: str = ""
+
+
 class LandscapeSnapshot(FrozenModel):
     as_of: datetime
     market_regime: str
@@ -302,6 +420,27 @@ class NarrativeUpdate(FrozenModel):
     sources: list[EvidenceSource] = Field(default_factory=list)
 
 
+class ProjectQualityDimension(FrozenModel):
+    status: EvidenceStatus
+    reason: str
+    evidence_urls: list[str] = Field(default_factory=list)
+
+
+class ProjectQualityAssessment(FrozenModel):
+    identity_and_team: ProjectQualityDimension
+    funding_and_backing: ProjectQualityDimension
+    product_delivery: ProjectQualityDimension
+    adoption_and_economics: ProjectQualityDimension
+    engineering_health: ProjectQualityDimension
+    security_and_governance: ProjectQualityDimension
+    community_quality: ProjectQualityDimension
+    token_value_capture: ProjectQualityDimension
+    seriousness_score: float | None = Field(default=None, ge=0, le=100)
+    quality_coverage: float = Field(default=0, ge=0, le=100)
+    unknowns: list[str] = Field(default_factory=list)
+    red_flags: list[str] = Field(default_factory=list)
+
+
 class ProjectReview(FrozenModel):
     narrative_id: str
     project_id: str
@@ -313,6 +452,7 @@ class ProjectReview(FrozenModel):
     catalyst: str
     risks: list[str] = Field(default_factory=list)
     sources: list[EvidenceSource] = Field(default_factory=list)
+    quality: ProjectQualityAssessment | None = None
 
 
 class DailyLandscapeResearch(FrozenModel):

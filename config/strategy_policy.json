@@ -1,0 +1,19 @@
+{
+  "version": "paper-v1",
+  "mode": "paper_only",
+  "minimum_prospective_days": 30,
+  "maximum_open_positions": 2,
+  "maximum_deployed_nav_pct": 60,
+  "maximum_position_nav_pct": 30,
+  "maximum_initial_risk_nav_pct": 5,
+  "maximum_new_entries_per_rolling_7d": 1,
+  "spot_only": true,
+  "human_confirmation_required": true,
+  "automatic_order_execution": false,
+  "dynamic_entry_states": ["emerging", "accelerating"],
+  "notes": [
+    "This policy is frozen for prospective evaluation and is not yet an entry engine.",
+    "Every dynamic observation receives immutable 7-day and 28-day outcome tracking.",
+    "No historical web reconstruction is used to claim past narrative performance."
+  ]
+}
