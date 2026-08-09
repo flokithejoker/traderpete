@@ -63,6 +63,25 @@ class NarrativeAssessment(FrozenModel):
     sources: list[EvidenceSource] = Field(default_factory=list)
 
 
+class NarrativeResearchDraft(FrozenModel):
+    narrative_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    name: str
+    summary: str
+    confidence_score: float = Field(ge=0, le=100)
+    signals: NarrativeSignals
+    thesis: str
+    counter_thesis: str
+    constituent_ids: list[str] = Field(default_factory=list)
+    sources: list[EvidenceSource] = Field(default_factory=list)
+
+
+class DailyResearchDraft(FrozenModel):
+    as_of: datetime
+    market_regime: str
+    narratives: list[NarrativeResearchDraft]
+    data_gaps: list[str] = Field(default_factory=list)
+
+
 class DailyNarrativeResearch(FrozenModel):
     as_of: datetime
     market_regime: str

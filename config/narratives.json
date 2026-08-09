@@ -1,0 +1,31 @@
+[
+  {
+    "id": "onchain_perpetuals",
+    "name": "Onchain Perpetuals",
+    "category_ids": ["decentralized-perpetuals"],
+    "asset_ids": ["hyperliquid"],
+    "protocol_ids": ["hyperliquid"]
+  },
+  {
+    "id": "tokenized_real_world_assets",
+    "name": "Tokenized Real-World Assets",
+    "category_ids": ["real-world-assets-rwa"],
+    "asset_ids": ["ondo-finance"],
+    "protocol_ids": ["ondo-finance"]
+  },
+  {
+    "id": "yield_bearing_dollars",
+    "name": "Yield-Bearing Dollars",
+    "category_ids": ["decentralized-finance-defi"],
+    "asset_ids": ["ethena", "pendle"],
+    "protocol_ids": ["ethena", "pendle"]
+  },
+  {
+    "id": "decentralized_ai",
+    "name": "Decentralized AI",
+    "category_ids": ["artificial-intelligence"],
+    "asset_ids": ["bittensor", "artificial-superintelligence-alliance"],
+    "protocol_ids": []
+  }
+]
+
