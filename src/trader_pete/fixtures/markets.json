@@ -1,0 +1,13 @@
+[
+  {"asset_id":"bitcoin","symbol":"BTC","name":"Bitcoin","observed_at":"2025-01-15T12:00:00Z","price_usd":100000,"market_cap_usd":1980000000000,"volume_24h_usd":52000000000,"change_24h_pct":2.1,"change_7d_pct":5.5,"change_30d_pct":8.2,"primary_sector":"currency"},
+  {"asset_id":"ethereum","symbol":"ETH","name":"Ethereum","observed_at":"2025-01-15T12:00:00Z","price_usd":3400,"market_cap_usd":410000000000,"volume_24h_usd":25000000000,"change_24h_pct":1.4,"change_7d_pct":3.2,"change_30d_pct":-1.5,"primary_sector":"smart_contract_platform"},
+  {"asset_id":"solana","symbol":"SOL","name":"Solana","observed_at":"2025-01-15T12:00:00Z","price_usd":205,"market_cap_usd":99000000000,"volume_24h_usd":6500000000,"change_24h_pct":3.8,"change_7d_pct":8.7,"change_30d_pct":12.3,"primary_sector":"smart_contract_platform"},
+  {"asset_id":"aave","symbol":"AAVE","name":"Aave","observed_at":"2025-01-15T12:00:00Z","price_usd":310,"market_cap_usd":4700000000,"volume_24h_usd":480000000,"change_24h_pct":4.2,"change_7d_pct":11.5,"change_30d_pct":18.0,"primary_sector":"defi"},
+  {"asset_id":"hyperliquid","symbol":"HYPE","name":"Hyperliquid","observed_at":"2025-01-15T12:00:00Z","price_usd":24,"market_cap_usd":8000000000,"volume_24h_usd":310000000,"change_24h_pct":6.1,"change_7d_pct":18.5,"change_30d_pct":31.0,"primary_sector":"defi"},
+  {"asset_id":"pendle","symbol":"PENDLE","name":"Pendle","observed_at":"2025-01-15T12:00:00Z","price_usd":5.2,"market_cap_usd":830000000,"volume_24h_usd":120000000,"change_24h_pct":5.0,"change_7d_pct":14.0,"change_30d_pct":22.5,"primary_sector":"defi"},
+  {"asset_id":"ondo-finance","symbol":"ONDO","name":"Ondo","observed_at":"2025-01-15T12:00:00Z","price_usd":1.35,"market_cap_usd":4300000000,"volume_24h_usd":430000000,"change_24h_pct":2.8,"change_7d_pct":9.1,"change_30d_pct":27.4,"primary_sector":"digitization"},
+  {"asset_id":"bittensor","symbol":"TAO","name":"Bittensor","observed_at":"2025-01-15T12:00:00Z","price_usd":475,"market_cap_usd":3900000000,"volume_24h_usd":210000000,"change_24h_pct":-1.1,"change_7d_pct":2.0,"change_30d_pct":-7.5,"primary_sector":"computing"},
+  {"asset_id":"artificial-superintelligence-alliance","symbol":"FET","name":"Artificial Superintelligence Alliance","observed_at":"2025-01-15T12:00:00Z","price_usd":1.3,"market_cap_usd":3300000000,"volume_24h_usd":370000000,"change_24h_pct":-2.0,"change_7d_pct":-4.0,"change_30d_pct":-12.0,"primary_sector":"computing"},
+  {"asset_id":"ethena","symbol":"ENA","name":"Ethena","observed_at":"2025-01-15T12:00:00Z","price_usd":0.82,"market_cap_usd":2500000000,"volume_24h_usd":450000000,"change_24h_pct":3.5,"change_7d_pct":12.0,"change_30d_pct":19.5,"primary_sector":"stablecoin"}
+]
+

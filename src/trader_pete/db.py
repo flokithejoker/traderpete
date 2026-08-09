@@ -10,7 +10,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from trader_pete.models import DailyNarrativeResearch, RunMode, RunStatus
+from trader_pete.models import (
+    CategoryMarket,
+    DailyNarrativeResearch,
+    MarketAsset,
+    ProtocolMetric,
+    RunMode,
+    RunStatus,
+)
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -315,3 +322,93 @@ class Database:
                         for source in narrative.sources
                     ],
                 )
+
+    def store_market_assets(self, run_id: str, assets: list[MarketAsset]) -> None:
+        with self.connect() as connection:
+            connection.executemany(
+                """
+                INSERT INTO market_snapshots (
+                    run_id, asset_id, symbol, name, observed_at, price_usd,
+                    market_cap_usd, volume_24h_usd, change_24h_pct,
+                    change_7d_pct, change_30d_pct, primary_sector
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        run_id,
+                        asset.asset_id,
+                        asset.symbol,
+                        asset.name,
+                        asset.observed_at.astimezone(UTC).isoformat(),
+                        asset.price_usd,
+                        asset.market_cap_usd,
+                        asset.volume_24h_usd,
+                        asset.change_24h_pct,
+                        asset.change_7d_pct,
+                        asset.change_30d_pct,
+                        asset.primary_sector,
+                    )
+                    for asset in assets
+                ],
+            )
+
+    def store_categories(self, run_id: str, categories: list[CategoryMarket]) -> None:
+        with self.connect() as connection:
+            connection.executemany(
+                """
+                INSERT INTO category_snapshots (
+                    run_id, category_id, name, observed_at, market_cap_usd,
+                    volume_24h_usd, change_24h_pct
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        run_id,
+                        category.category_id,
+                        category.name,
+                        category.observed_at.astimezone(UTC).isoformat(),
+                        category.market_cap_usd,
+                        category.volume_24h_usd,
+                        category.change_24h_pct,
+                    )
+                    for category in categories
+                ],
+            )
+
+    def store_protocols(self, run_id: str, protocols: list[ProtocolMetric]) -> None:
+        with self.connect() as connection:
+            connection.executemany(
+                """
+                INSERT INTO protocol_snapshots (
+                    run_id, protocol_id, name, category, observed_at, tvl_usd,
+                    change_1d_pct, change_7d_pct, change_30d_pct, chains_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        run_id,
+                        protocol.protocol_id,
+                        protocol.name,
+                        protocol.category,
+                        protocol.observed_at.astimezone(UTC).isoformat(),
+                        protocol.tvl_usd,
+                        protocol.change_1d_pct,
+                        protocol.change_7d_pct,
+                        protocol.change_30d_pct,
+                        canonical_json(protocol.chains),
+                    )
+                    for protocol in protocols
+                ],
+            )
+
+    def store_market_bundle(
+        self,
+        *,
+        run_id: str,
+        assets: list[MarketAsset],
+        categories: list[CategoryMarket],
+        protocols: list[ProtocolMetric],
+    ) -> None:
+        self.store_market_assets(run_id, assets)
+        self.store_categories(run_id, categories)
+        self.store_protocols(run_id, protocols)

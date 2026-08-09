@@ -1,0 +1,8 @@
+[
+  {"protocol_id":"aave","name":"Aave","category":"Lending","observed_at":"2025-01-15T12:00:00Z","tvl_usd":21000000000,"change_1d_pct":1.2,"change_7d_pct":4.8,"change_30d_pct":12.5,"chains":["Ethereum","Arbitrum","Base"]},
+  {"protocol_id":"hyperliquid","name":"Hyperliquid","category":"Derivatives","observed_at":"2025-01-15T12:00:00Z","tvl_usd":2700000000,"change_1d_pct":4.5,"change_7d_pct":15.0,"change_30d_pct":29.0,"chains":["Hyperliquid L1"]},
+  {"protocol_id":"ethena","name":"Ethena","category":"Basis Trading","observed_at":"2025-01-15T12:00:00Z","tvl_usd":5800000000,"change_1d_pct":2.1,"change_7d_pct":9.4,"change_30d_pct":21.0,"chains":["Ethereum"]},
+  {"protocol_id":"pendle","name":"Pendle","category":"Yield","observed_at":"2025-01-15T12:00:00Z","tvl_usd":4900000000,"change_1d_pct":3.0,"change_7d_pct":10.5,"change_30d_pct":18.4,"chains":["Ethereum","Arbitrum"]},
+  {"protocol_id":"ondo-finance","name":"Ondo Finance","category":"RWA","observed_at":"2025-01-15T12:00:00Z","tvl_usd":1100000000,"change_1d_pct":1.7,"change_7d_pct":7.3,"change_30d_pct":25.0,"chains":["Ethereum","Solana"]}
+]
+

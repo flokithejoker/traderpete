@@ -70,5 +70,55 @@ class DailyNarrativeResearch(FrozenModel):
     data_gaps: list[str] = Field(default_factory=list)
 
 
+class MarketAsset(FrozenModel):
+    asset_id: str
+    symbol: str
+    name: str
+    observed_at: datetime
+    price_usd: float | None = None
+    market_cap_usd: float | None = None
+    volume_24h_usd: float | None = None
+    change_24h_pct: float | None = None
+    change_7d_pct: float | None = None
+    change_30d_pct: float | None = None
+    primary_sector: str | None = None
+
+
+class CategoryMarket(FrozenModel):
+    category_id: str
+    name: str
+    observed_at: datetime
+    market_cap_usd: float | None = None
+    volume_24h_usd: float | None = None
+    change_24h_pct: float | None = None
+
+
+class ProtocolMetric(FrozenModel):
+    protocol_id: str
+    name: str
+    category: str | None = None
+    observed_at: datetime
+    tvl_usd: float | None = None
+    change_1d_pct: float | None = None
+    change_7d_pct: float | None = None
+    change_30d_pct: float | None = None
+    chains: list[str] = Field(default_factory=list)
+
+
+class ProviderBatch(FrozenModel):
+    provider: str
+    endpoint: str
+    observed_at: datetime
+    payload: list[dict[str, object]] | dict[str, object]
+
+
+class MarketDataBundle(FrozenModel):
+    observed_at: datetime
+    assets: list[MarketAsset]
+    categories: list[CategoryMarket]
+    protocols: list[ProtocolMetric]
+    payloads: list[ProviderBatch]
+
+
 def utc_now() -> datetime:
     return datetime.now(UTC)

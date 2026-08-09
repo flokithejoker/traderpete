@@ -1,0 +1,8 @@
+[
+  {"category_id":"real-world-assets-rwa","name":"Real World Assets","observed_at":"2025-01-15T12:00:00Z","market_cap_usd":52000000000,"volume_24h_usd":3200000000,"change_24h_pct":3.7},
+  {"category_id":"decentralized-finance-defi","name":"Decentralized Finance","observed_at":"2025-01-15T12:00:00Z","market_cap_usd":138000000000,"volume_24h_usd":8200000000,"change_24h_pct":2.9},
+  {"category_id":"decentralized-perpetuals","name":"Decentralized Perpetuals","observed_at":"2025-01-15T12:00:00Z","market_cap_usd":17000000000,"volume_24h_usd":1200000000,"change_24h_pct":5.8},
+  {"category_id":"artificial-intelligence","name":"Artificial Intelligence","observed_at":"2025-01-15T12:00:00Z","market_cap_usd":41000000000,"volume_24h_usd":3900000000,"change_24h_pct":-1.7},
+  {"category_id":"layer-1","name":"Layer 1","observed_at":"2025-01-15T12:00:00Z","market_cap_usd":2850000000000,"volume_24h_usd":91000000000,"change_24h_pct":2.2}
+]
+
