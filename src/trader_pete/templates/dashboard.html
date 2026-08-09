@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Trader Pete · {{ run.as_of[:10] }}</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #080b12;
+      --panel: #101622;
+      --panel-2: #151d2b;
+      --line: #263247;
+      --text: #eef3fb;
+      --muted: #8f9bb0;
+      --accent: #55e6a5;
+      --blue: #6aa9ff;
+      --warn: #ffbf69;
+      --bad: #ff6b7a;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 Inter, system-ui, sans-serif; }
+    main { max-width: 1500px; margin: auto; padding: 24px; }
+    header { display: flex; justify-content: space-between; gap: 24px; align-items: end; margin-bottom: 20px; }
+    h1 { margin: 0; font-size: 28px; letter-spacing: -.04em; }
+    h2 { margin: 0 0 14px; font-size: 16px; }
+    .eyebrow, .muted { color: var(--muted); }
+    .eyebrow { font-size: 11px; text-transform: uppercase; letter-spacing: .16em; }
+    .grid { display: grid; gap: 14px; }
+    .kpis { grid-template-columns: repeat(6, minmax(0, 1fr)); margin-bottom: 14px; }
+    .two { grid-template-columns: 1.1fr .9fr; }
+    .card { background: linear-gradient(145deg, var(--panel), #0d121c); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+    .kpi strong { display: block; margin-top: 7px; font-size: 22px; }
+    .alert { border-color: #624c24; color: var(--warn); }
+    .badge { display: inline-flex; padding: 3px 8px; border-radius: 99px; background: #1d2a3d; color: var(--blue); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+    .badge.accelerating, .badge.emerging { background: #123328; color: var(--accent); }
+    .badge.crowded, .badge.fading, .badge.broken { background: #3b2027; color: #ff9ca6; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border-bottom: 1px solid var(--line); padding: 10px 8px; text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; cursor: pointer; }
+    tr:last-child td { border-bottom: 0; }
+    .score { font-variant-numeric: tabular-nums; font-weight: 700; }
+    .positive { color: var(--accent); }
+    .negative { color: var(--bad); }
+    .meter { width: 84px; height: 5px; background: #202b3c; border-radius: 9px; overflow: hidden; margin-top: 5px; }
+    .meter > span { display: block; height: 100%; background: var(--accent); }
+    details { margin-top: 8px; color: var(--muted); }
+    details p { color: var(--text); }
+    a { color: var(--blue); }
+    section { margin-top: 14px; }
+    ul { margin: 8px 0 0; padding-left: 18px; }
+    .narrative-name { min-width: 220px; }
+    .nowrap { white-space: nowrap; }
+    footer { color: var(--muted); margin: 20px 0; font-size: 12px; }
+    @media (max-width: 950px) { .kpis { grid-template-columns: repeat(2, 1fr); } .two { grid-template-columns: 1fr; } main { padding: 14px; } .scroll { overflow-x: auto; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div><div class="eyebrow">Narrative intelligence · Phase 1</div><h1>Trader Pete</h1></div>
+    <div class="muted">Run {{ run.id }}<br>Evidence observed {{ observed_at }}</div>
+  </header>
+
+  <div class="grid kpis">
+    <div class="card kpi"><span class="eyebrow">Action</span><strong>NO ACTION</strong><span class="muted">Research-only phase</span></div>
+    <div class="card kpi"><span class="eyebrow">Regime</span><strong>{{ research.market_regime|title }}</strong><span class="muted">Model synthesis</span></div>
+    <div class="card kpi"><span class="eyebrow">Narratives</span><strong>{{ narratives|length }}</strong><span class="muted">Deep-research shortlist</span></div>
+    <div class="card kpi"><span class="eyebrow">Assets</span><strong>{{ assets|length }}</strong><span class="muted">Eligible universe</span></div>
+    <div class="card kpi"><span class="eyebrow">Protocols</span><strong>{{ protocols|length }}</strong><span class="muted">Fundamental coverage</span></div>
+    <div class="card kpi{% if is_stale %} alert{% endif %}"><span class="eyebrow">Freshness</span><strong>{{ age_hours }}h</strong><span>{% if is_stale %}STALE / FIXTURE{% else %}Current{% endif %}</span></div>
+  </div>
+
+  <section class="card">
+    <h2>Narrative Radar</h2>
+    <div class="scroll"><table data-sortable>
+      <thead><tr><th>Narrative</th><th>Lifecycle</th><th>Opportunity</th><th>Confidence</th><th>Attention</th><th>Catalyst</th><th>Market</th><th>Breadth</th><th>Fundamental</th><th>Crowding</th></tr></thead>
+      <tbody>
+      {% for item in narratives %}
+        <tr>
+          <td class="narrative-name"><strong>{{ item.name }}</strong><div class="muted">{{ item.summary }}</div>
+            <details><summary>Evidence and falsification</summary><p><strong>Thesis:</strong> {{ item.thesis }}</p><p><strong>Counter:</strong> {{ item.counter_thesis }}</p>
+              {% if item.sources %}<ul>{% for source in item.sources %}<li><a href="{{ source.url }}">{{ source.title }}</a>{% if not source.supports %} · contradicting{% endif %}</li>{% endfor %}</ul>{% else %}<p>No live sources in fixture mode.</p>{% endif %}
+            </details>
+          </td>
+          <td><span class="badge {{ item.lifecycle }}">{{ item.lifecycle }}</span></td>
+          <td class="score" data-value="{{ item.opportunity_score }}">{{ item.opportunity_score }}<div class="meter"><span style="width:{{ item.opportunity_score }}%"></span></div></td>
+          <td class="score" data-value="{{ item.confidence_score }}">{{ item.confidence_score }}</td>
+          <td>{{ item.signals.attention_acceleration }}</td><td>{{ item.signals.catalyst_strength }}</td><td>{{ item.signals.market_confirmation }}</td><td>{{ item.signals.breadth }}</td><td>{{ item.signals.fundamental_confirmation }}</td><td>{{ item.signals.crowding_risk }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table></div>
+  </section>
+
+  <div class="grid two">
+    <section class="card"><h2>Structural Sector Context</h2><div class="scroll"><table data-sortable><thead><tr><th>Sector</th><th>Assets</th><th>Market cap</th><th>Median 7d</th><th>Median 30d</th></tr></thead><tbody>{% for item in sectors %}<tr><td>{{ item.name }}</td><td>{{ item.asset_count }}</td><td data-value="{{ item.market_cap_usd }}">{{ item.market_cap_usd|money }}</td><td>{{ item.median_7d_pct|pct }}</td><td>{{ item.median_30d_pct|pct }}</td></tr>{% endfor %}</tbody></table></div></section>
+    <section class="card"><h2>Category Pulse</h2><div class="scroll"><table data-sortable><thead><tr><th>Category</th><th>24h</th><th>Volume</th></tr></thead><tbody>{% for item in categories[:10] %}<tr><td>{{ item.name }}</td><td data-value="{{ item.change_24h_pct or 0 }}" class="{% if item.change_24h_pct and item.change_24h_pct > 0 %}positive{% else %}negative{% endif %}">{{ item.change_24h_pct|pct }}</td><td>{{ item.volume_24h_usd|money }}</td></tr>{% endfor %}</tbody></table></div></section>
+  </div>
+
+  <section class="card"><h2>Project Explorer · Shortlisted Constituents</h2><div class="scroll"><table data-sortable><thead><tr><th>Project</th><th>Symbol</th><th>Sector</th><th>Market cap</th><th>Volume 24h</th><th>7d</th><th>30d</th></tr></thead><tbody>{% for item in selected_projects %}<tr><td>{{ item.name }}</td><td>{{ item.symbol }}</td><td>{{ item.primary_sector|sector }}</td><td>{{ item.market_cap_usd|money }}</td><td>{{ item.volume_24h_usd|money }}</td><td>{{ item.change_7d_pct|pct }}</td><td>{{ item.change_30d_pct|pct }}</td></tr>{% endfor %}</tbody></table></div></section>
+
+  <section class="card{% if data_gaps %} alert{% endif %}"><h2>Data Health</h2>{% if data_gaps %}<ul>{% for gap in data_gaps %}<li>{{ gap }}</li>{% endfor %}</ul>{% else %}<span>All required inputs present.</span>{% endif %}</section>
+
+  <footer>Model {{ research.model }} · prompt {{ research.prompt_version }} · scores are hypotheses awaiting prospective evaluation · no trading or financial advice</footer>
+</main>
+<script>
+  document.querySelectorAll('[data-sortable] th').forEach((header, index) => header.addEventListener('click', () => {
+    const body = header.closest('table').querySelector('tbody');
+    const rows = [...body.querySelectorAll('tr')];
+    const direction = header.dataset.direction === 'asc' ? -1 : 1;
+    rows.sort((a, b) => {
+      const av = a.children[index].dataset.value ?? a.children[index].innerText;
+      const bv = b.children[index].dataset.value ?? b.children[index].innerText;
+      return direction * (Number.isNaN(Number(av)) ? av.localeCompare(bv) : Number(av) - Number(bv));
+    });
+    rows.forEach(row => body.appendChild(row));
+    header.dataset.direction = direction === 1 ? 'asc' : 'desc';
+  }));
+</script>
+</body>
+</html>

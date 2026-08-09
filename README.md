@@ -44,6 +44,20 @@ trader-pete run-daily --offline
 trader-pete run-daily
 ```
 
+`doctor` prints only non-secret configuration and credential presence. `run-daily` executes one bounded pipeline and exits; an OS scheduler can call it later without embedding scheduling concerns in the research code.
+
+## Daily workflow
+
+1. Create an auditable run record.
+2. Collect CoinGecko market/category data and the top DefiLlama protocols by TVL.
+3. Preserve raw responses and normalized point-in-time records.
+4. Compile a bounded context containing at most 40 assets, 30 categories, and 40 protocols.
+5. Research at most three narratives using the Responses API, web search, and structured output.
+6. Recalculate lifecycle and opportunity scores deterministically.
+7. Render the report from the stored ledger, then mark the run successful.
+
+The initial opportunity score is a transparent hypothesis: attention acceleration 18%, novelty 13%, catalysts 17%, market confirmation 17%, breadth 13%, fundamentals 12%, and inverse crowding risk 10%. The weights must be evaluated prospectively before they influence capital decisions.
+
 Offline mode uses versioned fixtures and makes no provider calls. It exists for development, CI, and reproducible dashboard smoke tests. Live mode requires the relevant API keys.
 
 ## Data and reports
@@ -52,6 +66,8 @@ Offline mode uses versioned fixtures and makes no provider calls. It exists for 
 - Generated report: `reports/YYYY-MM-DD.html`
 - Provider payloads and daily outputs are keyed to a run ID and content hash.
 - Generated runtime data is ignored by Git.
+
+CoinGecko's current API exposes category market data and category-filtered coin markets; DefiLlama fundamentals require interpretation because USD TVL can change with asset prices even without deposits or withdrawals. Phase 1 stores the raw inputs so later features can separate price effects from flows.
 
 ## Development
 
@@ -62,4 +78,3 @@ pytest
 ```
 
 This is experimental research software, not financial advice. Crypto assets can lose most or all of their value; Phase 1 is intentionally read-only.
-

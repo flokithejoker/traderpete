@@ -412,3 +412,82 @@ class Database:
         self.store_market_assets(run_id, assets)
         self.store_categories(run_id, categories)
         self.store_protocols(run_id, protocols)
+
+    def store_dashboard_artifact(self, run_id: str, path: Path, sha256: str) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO dashboard_artifacts (run_id, path, sha256, created_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(run_id) DO UPDATE SET
+                    path = excluded.path,
+                    sha256 = excluded.sha256,
+                    created_at = excluded.created_at
+                """,
+                (run_id, str(path), sha256, datetime.now(UTC).isoformat()),
+            )
+
+    def dashboard_data(self, run_id: str) -> dict[str, Any]:
+        with self.connect() as connection:
+            run = connection.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+            research = connection.execute(
+                "SELECT * FROM research_runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if run is None or research is None:
+                raise KeyError(f"No complete research run found for {run_id}")
+            assets = connection.execute(
+                """
+                SELECT * FROM market_snapshots WHERE run_id = ?
+                ORDER BY market_cap_usd DESC
+                """,
+                (run_id,),
+            ).fetchall()
+            categories = connection.execute(
+                """
+                SELECT * FROM category_snapshots WHERE run_id = ?
+                ORDER BY change_24h_pct DESC
+                """,
+                (run_id,),
+            ).fetchall()
+            protocols = connection.execute(
+                """
+                SELECT * FROM protocol_snapshots WHERE run_id = ?
+                ORDER BY change_7d_pct DESC
+                """,
+                (run_id,),
+            ).fetchall()
+            narratives = connection.execute(
+                """
+                SELECT * FROM narrative_assessments WHERE run_id = ?
+                ORDER BY opportunity_score DESC, confidence_score DESC
+                """,
+                (run_id,),
+            ).fetchall()
+            memberships = connection.execute(
+                """
+                SELECT nm.narrative_id, ms.*
+                FROM narrative_memberships nm
+                JOIN market_snapshots ms
+                  ON ms.run_id = nm.run_id AND ms.asset_id = nm.asset_id
+                WHERE nm.run_id = ?
+                ORDER BY ms.market_cap_usd DESC
+                """,
+                (run_id,),
+            ).fetchall()
+            sources = connection.execute(
+                """
+                SELECT * FROM research_sources WHERE run_id = ? ORDER BY credibility DESC
+                """,
+                (run_id,),
+            ).fetchall()
+
+        return {
+            "run": dict(run),
+            "research": dict(research),
+            "assets": [dict(row) for row in assets],
+            "categories": [dict(row) for row in categories],
+            "protocols": [dict(row) for row in protocols],
+            "narratives": [dict(row) for row in narratives],
+            "memberships": [dict(row) for row in memberships],
+            "sources": [dict(row) for row in sources],
+        }
