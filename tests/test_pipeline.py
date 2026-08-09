@@ -20,7 +20,9 @@ def test_offline_pipeline_writes_ledger_and_self_contained_report(tmp_path: Path
 
     assert result.report_path.exists()
     html = result.report_path.read_text(encoding="utf-8")
-    assert "Narrative Radar" in html
+    assert "Narrative Board" in html
+    assert "What matters today" in html
+    assert "Morning brief" in html
     assert "Project Explorer" in html
     assert "NO ACTION" in html
     assert "OPENAI_API_KEY" not in html
@@ -35,9 +37,17 @@ def test_offline_pipeline_writes_ledger_and_self_contained_report(tmp_path: Path
         artifact = connection.execute(
             "SELECT sha256 FROM dashboard_artifacts WHERE run_id = ?", (result.run_id,)
         ).fetchone()
+        narratives = connection.execute(
+            "SELECT COUNT(*) FROM landscape_narratives WHERE run_id = ?", (result.run_id,)
+        ).fetchone()[0]
+        projects = connection.execute(
+            "SELECT COUNT(*) FROM landscape_projects WHERE run_id = ?", (result.run_id,)
+        ).fetchone()[0]
 
     assert run["status"] == "succeeded"
     assert artifact["sha256"] == hashlib.sha256(result.report_path.read_bytes()).hexdigest()
+    assert narratives == 14
+    assert projects >= 60
 
 
 def test_same_day_runs_create_distinct_immutable_reports(tmp_path: Path) -> None:

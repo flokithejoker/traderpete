@@ -3,12 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from trader_pete.analysis import analyze_landscape, load_narrative_registry
 from trader_pete.config import Settings
 from trader_pete.db import Database
 from trader_pete.models import RunMode, RunStatus, utc_now
 from trader_pete.providers import collect_market_data
 from trader_pete.reporting.dashboard import DashboardRenderer
-from trader_pete.research.narratives import NarrativeResearcher
+from trader_pete.research.narratives import LandscapeResearcher
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,14 +37,23 @@ def run_daily(settings: Settings, mode: RunMode) -> DailyRunResult:
             assets=bundle.assets,
             categories=bundle.categories,
             protocols=bundle.protocols,
+            protocol_activity=bundle.protocol_activity,
             trending_assets=bundle.trending_assets,
         )
-        output = NarrativeResearcher(settings).research(
+        definitions = load_narrative_registry(settings.root_dir / "config" / "narratives.json")
+        landscape = analyze_landscape(
             bundle,
+            definitions,
+            max_focus=settings.max_narratives,
+        )
+        output = LandscapeResearcher(settings).research(
+            bundle,
+            landscape,
             offline=mode is RunMode.OFFLINE,
         )
-        database.store_research(
+        database.store_landscape_research(
             run_id=run_id,
+            landscape=landscape,
             result=output.result,
             model=settings.model if mode is RunMode.LIVE else "offline-fixture",
             reasoning_effort=settings.reasoning_effort,

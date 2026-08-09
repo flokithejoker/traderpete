@@ -72,6 +72,8 @@ class CoinGeckoClient:
 
     def collect(
         self,
+        *,
+        requested_asset_ids: list[str] | None = None,
     ) -> tuple[
         list[MarketAsset],
         list[CategoryMarket],
@@ -100,24 +102,26 @@ class CoinGeckoClient:
             for rank, item in enumerate(trending_payload.get("coins", []), start=1)
         ]
         known_ids = {asset.asset_id for asset in assets}
-        missing_trending_ids = [
-            item.asset_id for item in trending_assets if item.asset_id not in known_ids
-        ]
-        trending_markets_payload: list[dict[str, Any]] = []
-        if missing_trending_ids:
-            trending_markets_payload = self._get(
+        requested_ids = set(requested_asset_ids or [])
+        requested_ids.update(item.asset_id for item in trending_assets)
+        missing_asset_ids = sorted(requested_ids - known_ids)
+        requested_markets_payload: list[dict[str, Any]] = []
+        if missing_asset_ids:
+            requested_markets_payload = self._get(
                 "/coins/markets",
                 {
                     "vs_currency": "usd",
-                    "ids": ",".join(missing_trending_ids),
+                    "ids": ",".join(missing_asset_ids),
                     "order": "market_cap_desc",
-                    "per_page": min(250, len(missing_trending_ids)),
+                    "per_page": min(250, len(missing_asset_ids)),
                     "page": 1,
                     "sparkline": "false",
                     "price_change_percentage": "24h,7d,30d",
                 },
             )
-            assets.extend(self._parse_asset(item, observed_at) for item in trending_markets_payload)
+            assets.extend(
+                self._parse_asset(item, observed_at) for item in requested_markets_payload
+            )
         categories = [self._parse_category(item, observed_at) for item in categories_payload]
         payloads = [
             ProviderBatch(
@@ -139,13 +143,13 @@ class CoinGeckoClient:
                 payload=trending_payload,
             ),
         ]
-        if trending_markets_payload:
+        if requested_markets_payload:
             payloads.append(
                 ProviderBatch(
                     provider="coingecko",
-                    endpoint="/coins/markets?universe=trending",
+                    endpoint="/coins/markets?universe=registry-and-trending",
                     observed_at=observed_at,
-                    payload=trending_markets_payload,
+                    payload=requested_markets_payload,
                 )
             )
         return assets, categories, trending_assets, payloads, observed_at

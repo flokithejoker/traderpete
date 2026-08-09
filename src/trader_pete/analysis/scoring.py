@@ -50,6 +50,8 @@ def source_domain(url: str) -> str:
 
 
 def is_primary_source(source: EvidenceSource) -> bool:
+    if source.is_primary:
+        return True
     source_type = source.source_type.lower()
     primary_markers = (
         "official",

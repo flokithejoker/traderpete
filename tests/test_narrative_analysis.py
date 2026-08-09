@@ -1,16 +1,20 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from trader_pete.analysis import build_research_context, score_signals
+from trader_pete.analysis import (
+    analyze_landscape,
+    build_research_context,
+    load_narrative_registry,
+    score_signals,
+)
 from trader_pete.analysis.scoring import evidence_metrics
 from trader_pete.config import Settings
 from trader_pete.models import (
-    DailyResearchDraft,
+    DailyLandscapeResearch,
     EvidenceSource,
-    NarrativeResearchDraft,
+    MarketEvent,
     NarrativeSignals,
     RunMode,
-    TrendingAsset,
 )
 from trader_pete.providers import collect_market_data
 from trader_pete.research.narratives import NarrativeResearcher
@@ -90,24 +94,64 @@ def test_context_is_bounded_and_excludes_raw_payloads(tmp_path: Path) -> None:
     assert "payloads" not in context
 
 
-def test_offline_research_is_ranked_and_explicitly_limited(tmp_path: Path) -> None:
+def _landscape(settings: Settings):
+    bundle = collect_market_data(settings, RunMode.OFFLINE)
+    definitions = load_narrative_registry(settings.root_dir / "config" / "narratives.json")
+    return bundle, analyze_landscape(bundle, definitions, max_focus=settings.max_narratives)
+
+
+def test_stable_landscape_tracks_every_registry_narrative() -> None:
+    settings = Settings.from_env(Path.cwd())
+    bundle, landscape = _landscape(settings)
+    definitions = load_narrative_registry(settings.root_dir / "config" / "narratives.json")
+
+    assert {item.narrative_id for item in landscape.narratives} == {item.id for item in definitions}
+    assert len(landscape.narratives) == 14
+    assert len(landscape.projects) == sum(len(item.projects) for item in definitions)
+    hyperliquid = next(item for item in landscape.projects if item.project_id == "hyperliquid")
+    assert hyperliquid.metrics.fees_growth_7d_pct == 28
+    assert hyperliquid.metrics.revenue_growth_7d_pct == 30
+    assert hyperliquid.metrics.dex_volume_growth_7d_pct == 24
+    assert bundle.protocol_activity
+    assert all(item.state.value not in {"leading", "building"} for item in landscape.narratives)
+
+
+def test_stale_project_market_data_is_excluded_from_ranking() -> None:
     settings = Settings.from_env(Path.cwd())
     bundle = collect_market_data(settings, RunMode.OFFLINE)
-    output = NarrativeResearcher(settings).research(bundle, offline=True)
+    assets = [
+        item.model_copy(update={"observed_at": bundle.observed_at.replace(year=2024)})
+        if item.asset_id == "solana"
+        else item
+        for item in bundle.assets
+    ]
+    stale_bundle = bundle.model_copy(update={"assets": assets})
+    definitions = load_narrative_registry(settings.root_dir / "config" / "narratives.json")
+    landscape = analyze_landscape(stale_bundle, definitions, max_focus=settings.max_narratives)
+    solana = next(
+        item
+        for item in landscape.projects
+        if item.narrative_id == "high_throughput_l1s" and item.project_id == "solana"
+    )
 
-    assert len(output.result.narratives) <= settings.candidate_narratives
-    assert sum(item.is_shortlisted for item in output.result.narratives) == 0
+    assert solana.metrics.market_data_age_hours > 48
+    assert solana.metrics.price_7d_pct is None
+    assert not solana.eligible
+
+
+def test_offline_research_is_explicit_about_missing_live_evidence() -> None:
+    settings = Settings.from_env(Path.cwd())
+    bundle, landscape = _landscape(settings)
+    output = NarrativeResearcher(settings).research(bundle, landscape, offline=True)
+
     assert output.response_id is None
     assert "Offline fixture" in output.result.data_gaps[0]
-    assert output.result.narratives == sorted(
-        output.result.narratives,
-        key=lambda item: (item.opportunity_score, item.confidence_score),
-        reverse=True,
-    )
+    assert not output.result.key_events
+    assert "No live news" in output.result.market_summary
 
 
 class FakeResponses:
-    def __init__(self, draft: DailyResearchDraft):
+    def __init__(self, draft: DailyLandscapeResearch):
         self.draft = draft
         self.kwargs = None
 
@@ -118,97 +162,29 @@ class FakeResponses:
 
 def test_live_research_is_stateless_structured_and_web_enabled(tmp_path: Path, monkeypatch) -> None:
     settings = Settings.from_env(Path.cwd())
-    bundle = collect_market_data(settings, RunMode.OFFLINE)
-    draft = DailyResearchDraft(
+    bundle, landscape = _landscape(settings)
+    valid_id = landscape.narratives[0].narrative_id
+    draft = DailyLandscapeResearch(
         as_of=bundle.observed_at,
-        market_regime="mixed",
-        narratives=[
-            NarrativeResearchDraft(
-                narrative_id="test_narrative",
-                name="Test Narrative",
-                summary="Test",
-                confidence_score=70,
-                signals=_signals(),
-                thesis="Test thesis",
-                counter_thesis="Test counter-thesis",
-                constituent_ids=["bitcoin", "unknown-asset"],
-                sources=[],
+        market_summary="Test morning context.",
+        key_events=[
+            MarketEvent(
+                title="Test event",
+                why_it_matters="Tests stable mapping.",
+                direction="mixed",
+                horizon="7d",
+                narrative_ids=[valid_id, "invented_narrative"],
             )
         ],
     )
     client = FakeResponses(draft)
-    output = NarrativeResearcher(settings, client=client).research(bundle, offline=False)
+    output = NarrativeResearcher(settings, client=client).research(bundle, landscape, offline=False)
 
     assert output.response_id == "resp_test"
     assert client.kwargs["store"] is False
     assert client.kwargs["reasoning"]["context"] == "current_turn"
-    assert client.kwargs["text_format"] is DailyResearchDraft
+    assert client.kwargs["text_format"] is DailyLandscapeResearch
     assert client.kwargs["tools"][0]["type"] == "web_search"
     assert client.kwargs["text"] == {"verbosity": "low"}
     assert "verbosity" not in client.kwargs
-    assert output.result.narratives[0].constituent_ids == ["bitcoin"]
-
-
-def test_live_research_normalizes_zero_to_one_judgment_scale() -> None:
-    settings = Settings.from_env(Path.cwd())
-    fixture = collect_market_data(settings, RunMode.OFFLINE)
-    bundle = fixture.model_copy(
-        update={
-            "trending_assets": [
-                TrendingAsset(
-                    asset_id="bitcoin",
-                    symbol="BTC",
-                    name="Bitcoin",
-                    observed_at=fixture.observed_at,
-                    search_rank=1,
-                    market_cap_rank=1,
-                )
-            ]
-        }
-    )
-    draft = DailyResearchDraft(
-        as_of=bundle.observed_at,
-        market_regime="mixed",
-        narratives=[
-            NarrativeResearchDraft(
-                narrative_id="scaled_candidate",
-                name="Scaled Candidate",
-                summary="Test",
-                confidence_score=0.8,
-                signals=NarrativeSignals(
-                    attention_acceleration=0.72,
-                    novelty=0.65,
-                    catalyst_strength=0.7,
-                    market_confirmation=0,
-                    breadth=0,
-                    fundamental_confirmation=0,
-                    crowding_risk=0.2,
-                ),
-                thesis="Test thesis",
-                counter_thesis="Test counter-thesis",
-                constituent_ids=["bitcoin", "ethereum", "solana"],
-                sources=[
-                    EvidenceSource(
-                        title="Primary",
-                        url="https://project.example/update",
-                        published_at=bundle.observed_at,
-                        source_type="official_announcement",
-                        publisher="Project",
-                        root_url="https://project.example/update",
-                        is_primary=True,
-                        credibility=0.8,
-                    )
-                ],
-            )
-        ],
-    )
-
-    output = NarrativeResearcher(settings, client=FakeResponses(draft)).research(
-        bundle, offline=False
-    )
-    signals = output.result.narratives[0].signals
-
-    assert signals.attention_acceleration == 72
-    assert signals.novelty == 65
-    assert signals.catalyst_strength == 70
-    assert signals.crowding_risk == 20
+    assert output.result.key_events[0].narrative_ids == [valid_id]

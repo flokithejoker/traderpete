@@ -21,6 +21,27 @@ class RunStatus(StrEnum):
     FAILED = "failed"
 
 
+class NarrativeState(StrEnum):
+    LEADING = "leading"
+    BUILDING = "building"
+    ACTIVE = "active"
+    COOLING = "cooling"
+    DORMANT = "dormant"
+
+
+class ActivityMetricType(StrEnum):
+    FEES = "fees"
+    REVENUE = "revenue"
+    DEX_VOLUME = "dex_volume"
+
+
+class ProjectVerdict(StrEnum):
+    CREDIBLE = "credible"
+    MIXED = "mixed"
+    SPECULATIVE = "speculative"
+    INSUFFICIENT = "insufficient"
+
+
 class NarrativeLifecycle(StrEnum):
     SEED = "seed"
     NASCENT = "nascent"
@@ -162,6 +183,147 @@ class ProtocolMetric(FrozenModel):
     chains: list[str] = Field(default_factory=list)
 
 
+class ProtocolActivityMetric(FrozenModel):
+    protocol_id: str
+    name: str
+    category: str | None = None
+    metric_type: ActivityMetricType
+    observed_at: datetime
+    total_24h_usd: float | None = None
+    total_7d_usd: float | None = None
+    total_30d_usd: float | None = None
+    growth_1d_pct: float | None = None
+    growth_7d_pct: float | None = None
+    growth_30d_pct: float | None = None
+
+
+class NarrativeProjectDefinition(FrozenModel):
+    id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    name: str
+    asset_id: str
+    protocol_ids: list[str] = Field(default_factory=list)
+
+
+class NarrativeDefinition(FrozenModel):
+    id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    name: str
+    description: str
+    kpi_profile: str
+    aliases: list[str] = Field(default_factory=list)
+    category_ids: list[str] = Field(default_factory=list)
+    projects: list[NarrativeProjectDefinition]
+
+
+class ProjectMetrics(FrozenModel):
+    market_data_age_hours: float | None = Field(default=None, ge=0)
+    price_7d_pct: float | None = None
+    price_30d_pct: float | None = None
+    btc_excess_7d_pct: float | None = None
+    price_acceleration: float | None = None
+    market_cap_usd: float | None = None
+    volume_24h_usd: float | None = None
+    turnover_24h: float | None = None
+    tvl_usd: float | None = None
+    tvl_growth_7d_pct: float | None = None
+    fees_7d_usd: float | None = None
+    fees_growth_7d_pct: float | None = None
+    revenue_7d_usd: float | None = None
+    revenue_growth_7d_pct: float | None = None
+    dex_volume_7d_usd: float | None = None
+    dex_volume_growth_7d_pct: float | None = None
+    fundamental_growth_score: float | None = Field(default=None, ge=0, le=100)
+    liquidity_score: float | None = Field(default=None, ge=0, le=100)
+    overheat_risk: float = Field(ge=0, le=100)
+    is_trending: bool = False
+    coverage: int = Field(ge=0)
+
+
+class ProjectSnapshot(FrozenModel):
+    narrative_id: str
+    project_id: str
+    name: str
+    asset_id: str
+    rank: int = Field(ge=1)
+    score: float = Field(ge=0, le=100)
+    eligible: bool
+    metrics: ProjectMetrics
+    selection_notes: list[str] = Field(default_factory=list)
+
+
+class NarrativeMetrics(FrozenModel):
+    median_7d_pct: float | None = None
+    median_30d_pct: float | None = None
+    btc_excess_7d_pct: float | None = None
+    breadth_vs_btc_pct: float | None = None
+    fundamental_growth_score: float | None = Field(default=None, ge=0, le=100)
+    category_change_24h_pct: float | None = None
+    attention_score: float = Field(ge=0, le=100)
+    median_overheat_risk: float = Field(ge=0, le=100)
+    project_count: int = Field(ge=0)
+    measured_project_count: int = Field(ge=0)
+    economic_metric_count: int = Field(ge=0)
+    trending_project_count: int = Field(ge=0)
+
+
+class StableNarrativeSnapshot(FrozenModel):
+    narrative_id: str
+    name: str
+    description: str
+    kpi_profile: str
+    rank: int = Field(ge=1)
+    state: NarrativeState
+    is_focus: bool = False
+    score: float = Field(ge=0, le=100)
+    confidence: float = Field(ge=0, le=100)
+    metrics: NarrativeMetrics
+
+
+class LandscapeSnapshot(FrozenModel):
+    as_of: datetime
+    market_regime: str
+    narratives: list[StableNarrativeSnapshot]
+    projects: list[ProjectSnapshot]
+    data_gaps: list[str] = Field(default_factory=list)
+
+
+class MarketEvent(FrozenModel):
+    title: str
+    why_it_matters: str
+    direction: str
+    horizon: str
+    narrative_ids: list[str]
+    sources: list[EvidenceSource] = Field(default_factory=list)
+
+
+class NarrativeUpdate(FrozenModel):
+    narrative_id: str
+    why_now: str
+    counterpoint: str
+    sources: list[EvidenceSource] = Field(default_factory=list)
+
+
+class ProjectReview(FrozenModel):
+    narrative_id: str
+    project_id: str
+    verdict: ProjectVerdict
+    mission: str
+    team_and_backing: str
+    product_traction: str
+    community_quality: str
+    catalyst: str
+    risks: list[str] = Field(default_factory=list)
+    sources: list[EvidenceSource] = Field(default_factory=list)
+
+
+class DailyLandscapeResearch(FrozenModel):
+    as_of: datetime
+    market_summary: str
+    key_events: list[MarketEvent] = Field(default_factory=list, max_length=5)
+    narrative_updates: list[NarrativeUpdate] = Field(default_factory=list)
+    project_reviews: list[ProjectReview] = Field(default_factory=list)
+    data_gaps: list[str] = Field(default_factory=list)
+
+
 class ProviderBatch(FrozenModel):
     provider: str
     endpoint: str
@@ -174,6 +336,7 @@ class MarketDataBundle(FrozenModel):
     assets: list[MarketAsset]
     categories: list[CategoryMarket]
     protocols: list[ProtocolMetric]
+    protocol_activity: list[ProtocolActivityMetric] = Field(default_factory=list)
     trending_assets: list[TrendingAsset] = Field(default_factory=list)
     payloads: list[ProviderBatch]
 

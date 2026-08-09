@@ -1,31 +1,212 @@
 [
   {
-    "id": "onchain_perpetuals",
-    "name": "Onchain Perpetuals",
-    "category_ids": ["decentralized-perpetuals"],
-    "asset_ids": ["hyperliquid"],
-    "protocol_ids": ["hyperliquid"]
+    "id": "high_throughput_l1s",
+    "name": "High-Throughput L1 Ecosystems",
+    "description": "Alternative base layers competing on execution speed, cost, apps, and developer activity.",
+    "kpi_profile": "chain_activity",
+    "aliases": ["alt L1s", "new L1s", "parallelized chains"],
+    "category_ids": ["smart-contract-platform", "layer-1-l1"],
+    "projects": [
+      {"id": "solana", "name": "Solana", "asset_id": "solana", "protocol_ids": []},
+      {"id": "sui", "name": "Sui", "asset_id": "sui", "protocol_ids": []},
+      {"id": "avalanche", "name": "Avalanche", "asset_id": "avalanche-2", "protocol_ids": []},
+      {"id": "near", "name": "NEAR", "asset_id": "near", "protocol_ids": []},
+      {"id": "aptos", "name": "Aptos", "asset_id": "aptos", "protocol_ids": []}
+    ]
+  },
+  {
+    "id": "ethereum_scaling",
+    "name": "Ethereum Scaling & Modular Execution",
+    "description": "Rollups and modular execution layers expanding Ethereum throughput and application capacity.",
+    "kpi_profile": "chain_activity",
+    "aliases": ["L2s", "rollups", "modular blockchains"],
+    "category_ids": ["layer-2", "zero-knowledge-zk"],
+    "projects": [
+      {"id": "arbitrum", "name": "Arbitrum", "asset_id": "arbitrum", "protocol_ids": []},
+      {"id": "optimism", "name": "Optimism", "asset_id": "optimism", "protocol_ids": []},
+      {"id": "starknet", "name": "Starknet", "asset_id": "starknet", "protocol_ids": []},
+      {"id": "zksync", "name": "ZKsync", "asset_id": "zksync", "protocol_ids": []},
+      {"id": "mantle", "name": "Mantle", "asset_id": "mantle", "protocol_ids": []}
+    ]
+  },
+  {
+    "id": "onchain_trading",
+    "name": "Onchain Trading",
+    "description": "Spot exchanges, perpetual markets, and trading infrastructure moving exchange activity onchain.",
+    "kpi_profile": "trading",
+    "aliases": ["DEXs", "perpetuals", "onchain exchanges"],
+    "category_ids": ["decentralized-exchange", "decentralized-perpetuals"],
+    "projects": [
+      {"id": "hyperliquid", "name": "Hyperliquid", "asset_id": "hyperliquid", "protocol_ids": ["hyperliquid", "hyperliquid-perps", "hyperliquid-l1", "hyperliquid-bridge"]},
+      {"id": "uniswap", "name": "Uniswap", "asset_id": "uniswap", "protocol_ids": ["uniswap", "uniswap-v3"]},
+      {"id": "jupiter", "name": "Jupiter", "asset_id": "jupiter-exchange-solana", "protocol_ids": ["jupiter", "jupiter-perpetual-exchange"]},
+      {"id": "dydx", "name": "dYdX", "asset_id": "dydx-chain", "protocol_ids": ["dydx", "dydx-v4"]},
+      {"id": "drift", "name": "Drift", "asset_id": "drift-protocol", "protocol_ids": ["drift", "drift-protocol"]}
+    ]
+  },
+  {
+    "id": "onchain_credit",
+    "name": "Lending & Onchain Credit",
+    "description": "Collateralized lending, credit markets, and capital-efficient onchain borrowing.",
+    "kpi_profile": "credit",
+    "aliases": ["DeFi lending", "money markets", "onchain credit"],
+    "category_ids": ["lending-borrowing", "decentralized-finance-defi"],
+    "projects": [
+      {"id": "aave", "name": "Aave", "asset_id": "aave", "protocol_ids": ["aave", "aave-v3"]},
+      {"id": "morpho", "name": "Morpho", "asset_id": "morpho", "protocol_ids": ["morpho", "morpho-blue"]},
+      {"id": "compound", "name": "Compound", "asset_id": "compound-governance-token", "protocol_ids": ["compound", "compound-v3"]},
+      {"id": "kamino", "name": "Kamino", "asset_id": "kamino", "protocol_ids": ["kamino-lend", "kamino"]},
+      {"id": "maple", "name": "Maple", "asset_id": "maple", "protocol_ids": ["maple-finance", "maple"]}
+    ]
+  },
+  {
+    "id": "stablecoin_infrastructure",
+    "name": "Stablecoins & Crypto Payments",
+    "description": "Dollar rails, stablecoin issuers, liquidity infrastructure, and crypto-native payments.",
+    "kpi_profile": "payments",
+    "aliases": ["stablecoins", "payments", "digital dollars"],
+    "category_ids": ["stablecoins", "payment-solutions"],
+    "projects": [
+      {"id": "ethena", "name": "Ethena", "asset_id": "ethena", "protocol_ids": ["ethena"]},
+      {"id": "sky", "name": "Sky", "asset_id": "sky", "protocol_ids": ["makerdao", "sky-lending"]},
+      {"id": "curve", "name": "Curve", "asset_id": "curve-dao-token", "protocol_ids": ["curve-dex", "curve"]},
+      {"id": "stellar", "name": "Stellar", "asset_id": "stellar", "protocol_ids": []},
+      {"id": "xrp", "name": "XRP", "asset_id": "ripple", "protocol_ids": []}
+    ]
   },
   {
     "id": "tokenized_real_world_assets",
     "name": "Tokenized Real-World Assets",
-    "category_ids": ["real-world-assets-rwa"],
-    "asset_ids": ["ondo-finance"],
-    "protocol_ids": ["ondo-finance"]
+    "description": "Public and private market assets represented and settled through crypto networks.",
+    "kpi_profile": "assets_under_management",
+    "aliases": ["RWA", "tokenization", "onchain assets"],
+    "category_ids": ["real-world-assets-rwa", "tokenized-treasury-bonds-t-bonds"],
+    "projects": [
+      {"id": "ondo", "name": "Ondo", "asset_id": "ondo-finance", "protocol_ids": ["ondo-finance", "ondo-yield-assets"]},
+      {"id": "centrifuge", "name": "Centrifuge", "asset_id": "centrifuge", "protocol_ids": ["centrifuge"]},
+      {"id": "maple", "name": "Maple", "asset_id": "maple", "protocol_ids": ["maple-finance", "maple"]},
+      {"id": "chainlink", "name": "Chainlink", "asset_id": "chainlink", "protocol_ids": []},
+      {"id": "mantra", "name": "MANTRA", "asset_id": "mantra-dao", "protocol_ids": ["mantra-dao"]}
+    ]
   },
   {
-    "id": "yield_bearing_dollars",
-    "name": "Yield-Bearing Dollars",
-    "category_ids": ["decentralized-finance-defi"],
-    "asset_ids": ["ethena", "pendle"],
-    "protocol_ids": ["ethena", "pendle"]
+    "id": "staking_and_restaking",
+    "name": "Staking, Restaking & Onchain Yield",
+    "description": "Protocols turning network security and staked assets into liquid or reusable yield-bearing collateral.",
+    "kpi_profile": "yield",
+    "aliases": ["liquid staking", "restaking", "yield protocols"],
+    "category_ids": ["liquid-staking-tokens", "restaking"],
+    "projects": [
+      {"id": "lido", "name": "Lido", "asset_id": "lido-dao", "protocol_ids": ["lido"]},
+      {"id": "etherfi", "name": "Ether.fi", "asset_id": "ether-fi", "protocol_ids": ["ether.fi-stake", "ether.fi"]},
+      {"id": "eigenlayer", "name": "EigenLayer", "asset_id": "eigenlayer", "protocol_ids": ["eigenlayer"]},
+      {"id": "jito", "name": "Jito", "asset_id": "jito-staked-sol", "protocol_ids": ["jito-liquid-staking"]},
+      {"id": "pendle", "name": "Pendle", "asset_id": "pendle", "protocol_ids": ["pendle"]}
+    ]
   },
   {
-    "id": "decentralized_ai",
-    "name": "Decentralized AI",
-    "category_ids": ["artificial-intelligence"],
-    "asset_ids": ["bittensor", "artificial-superintelligence-alliance"],
-    "protocol_ids": []
+    "id": "bitcoin_finance",
+    "name": "Bitcoin Finance",
+    "description": "Scaling, staking, bridging, and financial applications that make Bitcoin productive collateral.",
+    "kpi_profile": "bitcoin_activity",
+    "aliases": ["BTCFi", "Bitcoin DeFi", "Bitcoin L2s"],
+    "category_ids": ["bitcoin-layer-2", "bitcoin-ecosystem"],
+    "projects": [
+      {"id": "bitcoin", "name": "Bitcoin", "asset_id": "bitcoin", "protocol_ids": []},
+      {"id": "stacks", "name": "Stacks", "asset_id": "blockstack", "protocol_ids": []},
+      {"id": "babylon", "name": "Babylon", "asset_id": "babylon", "protocol_ids": ["babylon"]},
+      {"id": "threshold", "name": "Threshold", "asset_id": "threshold-network-token", "protocol_ids": ["threshold-network"]},
+      {"id": "rootstock", "name": "Rootstock Infrastructure", "asset_id": "rootstock-infrastructure-framework", "protocol_ids": []}
+    ]
+  },
+  {
+    "id": "ai_and_compute",
+    "name": "AI & Decentralized Compute",
+    "description": "Open networks for machine intelligence, model coordination, inference, and compute markets.",
+    "kpi_profile": "compute_demand",
+    "aliases": ["crypto AI", "decentralized AI", "GPU networks"],
+    "category_ids": ["artificial-intelligence", "decentralized-computing"],
+    "projects": [
+      {"id": "bittensor", "name": "Bittensor", "asset_id": "bittensor", "protocol_ids": []},
+      {"id": "render", "name": "Render", "asset_id": "render-token", "protocol_ids": []},
+      {"id": "asi", "name": "Artificial Superintelligence Alliance", "asset_id": "artificial-superintelligence-alliance", "protocol_ids": []},
+      {"id": "akash", "name": "Akash", "asset_id": "akash-network", "protocol_ids": []},
+      {"id": "grass", "name": "Grass", "asset_id": "grass", "protocol_ids": []}
+    ]
+  },
+  {
+    "id": "depin",
+    "name": "DePIN",
+    "description": "Token-incentivized physical infrastructure for wireless, compute, storage, sensors, and mapping.",
+    "kpi_profile": "physical_network_usage",
+    "aliases": ["decentralized physical infrastructure", "physical resource networks"],
+    "category_ids": ["depin", "internet-of-things-iot"],
+    "projects": [
+      {"id": "render", "name": "Render", "asset_id": "render-token", "protocol_ids": []},
+      {"id": "helium", "name": "Helium", "asset_id": "helium", "protocol_ids": []},
+      {"id": "akash", "name": "Akash", "asset_id": "akash-network", "protocol_ids": []},
+      {"id": "ionet", "name": "io.net", "asset_id": "io-net", "protocol_ids": []},
+      {"id": "grass", "name": "Grass", "asset_id": "grass", "protocol_ids": []}
+    ]
+  },
+  {
+    "id": "memecoins_and_launchpads",
+    "name": "Memecoins & Token Launchpads",
+    "description": "Attention-driven assets and the issuance venues that create and distribute them.",
+    "kpi_profile": "attention_and_liquidity",
+    "aliases": ["memes", "culture coins", "launchpads"],
+    "category_ids": ["meme-token", "launchpad"],
+    "projects": [
+      {"id": "dogecoin", "name": "Dogecoin", "asset_id": "dogecoin", "protocol_ids": []},
+      {"id": "shiba", "name": "Shiba Inu", "asset_id": "shiba-inu", "protocol_ids": []},
+      {"id": "pepe", "name": "Pepe", "asset_id": "pepe", "protocol_ids": []},
+      {"id": "bonk", "name": "Bonk", "asset_id": "bonk", "protocol_ids": []},
+      {"id": "pump", "name": "Pump.fun", "asset_id": "pump-fun", "protocol_ids": ["pump.fun"]}
+    ]
+  },
+  {
+    "id": "consumer_crypto",
+    "name": "Consumer Crypto",
+    "description": "Gaming, social, creator, fan, and prediction-market products aimed at recurring consumer use.",
+    "kpi_profile": "active_users",
+    "aliases": ["gaming", "social", "prediction markets"],
+    "category_ids": ["gaming", "socialfi", "prediction-markets"],
+    "projects": [
+      {"id": "immutable", "name": "Immutable", "asset_id": "immutable-x", "protocol_ids": []},
+      {"id": "ronin", "name": "Ronin", "asset_id": "ronin", "protocol_ids": []},
+      {"id": "sandbox", "name": "The Sandbox", "asset_id": "the-sandbox", "protocol_ids": []},
+      {"id": "decentraland", "name": "Decentraland", "asset_id": "decentraland", "protocol_ids": []},
+      {"id": "chiliz", "name": "Chiliz", "asset_id": "chiliz", "protocol_ids": []}
+    ]
+  },
+  {
+    "id": "privacy",
+    "name": "Privacy & Confidential Computing",
+    "description": "Private money, transactions, identity, and computation for users and applications.",
+    "kpi_profile": "network_usage",
+    "aliases": ["privacy coins", "confidential compute", "ZK privacy"],
+    "category_ids": ["privacy-coins", "privacy-blockchain"],
+    "projects": [
+      {"id": "monero", "name": "Monero", "asset_id": "monero", "protocol_ids": []},
+      {"id": "zcash", "name": "Zcash", "asset_id": "zcash", "protocol_ids": []},
+      {"id": "railgun", "name": "Railgun", "asset_id": "railgun", "protocol_ids": ["railgun"]},
+      {"id": "secret", "name": "Secret", "asset_id": "secret", "protocol_ids": []},
+      {"id": "oasis", "name": "Oasis", "asset_id": "oasis-network", "protocol_ids": []}
+    ]
+  },
+  {
+    "id": "interoperability",
+    "name": "Interoperability & Cross-Chain Messaging",
+    "description": "Messaging, oracle, and asset-transfer infrastructure connecting applications and networks.",
+    "kpi_profile": "message_and_transfer_volume",
+    "aliases": ["bridges", "cross-chain", "oracles"],
+    "category_ids": ["interoperability", "oracle"],
+    "projects": [
+      {"id": "chainlink", "name": "Chainlink", "asset_id": "chainlink", "protocol_ids": []},
+      {"id": "layerzero", "name": "LayerZero", "asset_id": "layerzero", "protocol_ids": []},
+      {"id": "wormhole", "name": "Wormhole", "asset_id": "wormhole", "protocol_ids": []},
+      {"id": "axelar", "name": "Axelar", "asset_id": "axelar", "protocol_ids": []},
+      {"id": "cosmos", "name": "Cosmos Hub", "asset_id": "cosmos", "protocol_ids": []}
+    ]
   }
 ]
-

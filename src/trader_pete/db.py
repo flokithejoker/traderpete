@@ -12,8 +12,11 @@ from typing import Any
 
 from trader_pete.models import (
     CategoryMarket,
+    DailyLandscapeResearch,
     DailyNarrativeResearch,
+    LandscapeSnapshot,
     MarketAsset,
+    ProtocolActivityMetric,
     ProtocolMetric,
     RunMode,
     RunStatus,
@@ -89,6 +92,22 @@ CREATE TABLE IF NOT EXISTS protocol_snapshots (
     PRIMARY KEY (run_id, protocol_id)
 );
 
+CREATE TABLE IF NOT EXISTS protocol_activity_snapshots (
+    run_id TEXT NOT NULL REFERENCES runs(id),
+    protocol_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    category TEXT,
+    metric_type TEXT NOT NULL CHECK (metric_type IN ('fees', 'revenue', 'dex_volume')),
+    observed_at TEXT NOT NULL,
+    total_24h_usd REAL,
+    total_7d_usd REAL,
+    total_30d_usd REAL,
+    growth_1d_pct REAL,
+    growth_7d_pct REAL,
+    growth_30d_pct REAL,
+    PRIMARY KEY (run_id, protocol_id, metric_type)
+);
+
 CREATE TABLE IF NOT EXISTS trending_snapshots (
     run_id TEXT NOT NULL REFERENCES runs(id),
     asset_id TEXT NOT NULL,
@@ -153,7 +172,53 @@ CREATE TABLE IF NOT EXISTS research_runs (
     prompt_hash TEXT NOT NULL,
     response_id TEXT,
     market_regime TEXT NOT NULL,
+    market_summary TEXT NOT NULL DEFAULT '',
     data_gaps_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS landscape_narratives (
+    run_id TEXT NOT NULL REFERENCES runs(id),
+    narrative_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL,
+    kpi_profile TEXT NOT NULL,
+    rank INTEGER NOT NULL,
+    state TEXT NOT NULL,
+    is_focus INTEGER NOT NULL DEFAULT 0,
+    score REAL NOT NULL,
+    confidence REAL NOT NULL,
+    metrics_json TEXT NOT NULL,
+    update_json TEXT,
+    PRIMARY KEY (run_id, narrative_id)
+);
+
+CREATE TABLE IF NOT EXISTS landscape_projects (
+    run_id TEXT NOT NULL,
+    narrative_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    asset_id TEXT NOT NULL,
+    rank INTEGER NOT NULL,
+    score REAL NOT NULL,
+    eligible INTEGER NOT NULL,
+    metrics_json TEXT NOT NULL,
+    selection_notes_json TEXT NOT NULL,
+    review_json TEXT,
+    PRIMARY KEY (run_id, narrative_id, project_id),
+    FOREIGN KEY (run_id, narrative_id)
+        REFERENCES landscape_narratives(run_id, narrative_id)
+);
+
+CREATE TABLE IF NOT EXISTS market_events (
+    run_id TEXT NOT NULL REFERENCES runs(id),
+    event_index INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    why_it_matters TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    horizon TEXT NOT NULL,
+    narrative_ids_json TEXT NOT NULL,
+    sources_json TEXT NOT NULL,
+    PRIMARY KEY (run_id, event_index)
 );
 
 CREATE TABLE IF NOT EXISTS dashboard_artifacts (
@@ -215,13 +280,16 @@ class Database:
                 "claim": "TEXT NOT NULL DEFAULT ''",
                 "is_primary": "INTEGER NOT NULL DEFAULT 0",
             },
+            "research_runs": {
+                "market_summary": "TEXT NOT NULL DEFAULT ''",
+            },
         }
         for table, columns in additions.items():
             existing = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})")}
             for column, definition in columns.items():
                 if column not in existing:
                     connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
-        connection.execute("PRAGMA user_version = 2")
+        connection.execute("PRAGMA user_version = 3")
 
     def create_run(self, *, as_of: datetime, mode: RunMode, config: dict[str, object]) -> str:
         run_id = f"{as_of.strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
@@ -377,6 +445,123 @@ class Database:
                     ],
                 )
 
+    def store_landscape_research(
+        self,
+        *,
+        run_id: str,
+        landscape: LandscapeSnapshot,
+        result: DailyLandscapeResearch,
+        model: str,
+        reasoning_effort: str,
+        prompt_version: str,
+        prompt: str,
+        response_id: str | None,
+    ) -> None:
+        valid_narrative_ids = {item.narrative_id for item in landscape.narratives}
+        updates = {
+            item.narrative_id: item
+            for item in result.narrative_updates
+            if item.narrative_id in valid_narrative_ids
+        }
+        reviews = {(item.narrative_id, item.project_id): item for item in result.project_reviews}
+        gaps = list(dict.fromkeys([*landscape.data_gaps, *result.data_gaps]))
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO research_runs (
+                    run_id, model, reasoning_effort, prompt_version, prompt_hash,
+                    response_id, market_regime, market_summary, data_gaps_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    model,
+                    reasoning_effort,
+                    prompt_version,
+                    content_hash(prompt),
+                    response_id,
+                    landscape.market_regime,
+                    result.market_summary,
+                    canonical_json(gaps),
+                ),
+            )
+            connection.executemany(
+                """
+                INSERT INTO landscape_narratives (
+                    run_id, narrative_id, name, description, kpi_profile, rank,
+                    state, is_focus, score, confidence, metrics_json, update_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        run_id,
+                        item.narrative_id,
+                        item.name,
+                        item.description,
+                        item.kpi_profile,
+                        item.rank,
+                        item.state.value,
+                        int(item.is_focus),
+                        item.score,
+                        item.confidence,
+                        canonical_json(item.metrics.model_dump(mode="json")),
+                        canonical_json(updates[item.narrative_id].model_dump(mode="json"))
+                        if item.narrative_id in updates
+                        else None,
+                    )
+                    for item in landscape.narratives
+                ],
+            )
+            connection.executemany(
+                """
+                INSERT INTO landscape_projects (
+                    run_id, narrative_id, project_id, name, asset_id, rank,
+                    score, eligible, metrics_json, selection_notes_json, review_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        run_id,
+                        item.narrative_id,
+                        item.project_id,
+                        item.name,
+                        item.asset_id,
+                        item.rank,
+                        item.score,
+                        int(item.eligible),
+                        canonical_json(item.metrics.model_dump(mode="json")),
+                        canonical_json(item.selection_notes),
+                        canonical_json(
+                            reviews[(item.narrative_id, item.project_id)].model_dump(mode="json")
+                        )
+                        if (item.narrative_id, item.project_id) in reviews
+                        else None,
+                    )
+                    for item in landscape.projects
+                ],
+            )
+            connection.executemany(
+                """
+                INSERT INTO market_events (
+                    run_id, event_index, title, why_it_matters, direction,
+                    horizon, narrative_ids_json, sources_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        run_id,
+                        index,
+                        item.title,
+                        item.why_it_matters,
+                        item.direction,
+                        item.horizon,
+                        canonical_json(item.narrative_ids),
+                        canonical_json([source.model_dump(mode="json") for source in item.sources]),
+                    )
+                    for index, item in enumerate(result.key_events, 1)
+                ],
+            )
+
     def store_market_assets(self, run_id: str, assets: list[MarketAsset]) -> None:
         with self.connect() as connection:
             connection.executemany(
@@ -456,6 +641,35 @@ class Database:
                 ],
             )
 
+    def store_protocol_activity(self, run_id: str, metrics: list[ProtocolActivityMetric]) -> None:
+        with self.connect() as connection:
+            connection.executemany(
+                """
+                INSERT INTO protocol_activity_snapshots (
+                    run_id, protocol_id, name, category, metric_type, observed_at,
+                    total_24h_usd, total_7d_usd, total_30d_usd, growth_1d_pct,
+                    growth_7d_pct, growth_30d_pct
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        run_id,
+                        item.protocol_id,
+                        item.name,
+                        item.category,
+                        item.metric_type.value,
+                        item.observed_at.astimezone(UTC).isoformat(),
+                        item.total_24h_usd,
+                        item.total_7d_usd,
+                        item.total_30d_usd,
+                        item.growth_1d_pct,
+                        item.growth_7d_pct,
+                        item.growth_30d_pct,
+                    )
+                    for item in metrics
+                ],
+            )
+
     def store_trending_assets(self, run_id: str, assets: list[TrendingAsset]) -> None:
         with self.connect() as connection:
             connection.executemany(
@@ -485,11 +699,13 @@ class Database:
         assets: list[MarketAsset],
         categories: list[CategoryMarket],
         protocols: list[ProtocolMetric],
+        protocol_activity: list[ProtocolActivityMetric] | None = None,
         trending_assets: list[TrendingAsset] | None = None,
     ) -> None:
         self.store_market_assets(run_id, assets)
         self.store_categories(run_id, categories)
         self.store_protocols(run_id, protocols)
+        self.store_protocol_activity(run_id, protocol_activity or [])
         self.store_trending_assets(run_id, trending_assets or [])
 
     def store_dashboard_artifact(self, run_id: str, path: Path, sha256: str) -> None:
@@ -579,4 +795,89 @@ class Database:
             "sources": [dict(row) for row in sources],
             "trending": [dict(row) for row in trending],
             "run_history": [dict(row) for row in run_history],
+        }
+
+    def landscape_dashboard_data(self, run_id: str) -> dict[str, Any]:
+        with self.connect() as connection:
+            run = connection.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+            research = connection.execute(
+                "SELECT * FROM research_runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if run is None or research is None:
+                raise KeyError(f"No complete landscape run found for {run_id}")
+            narratives = connection.execute(
+                """
+                SELECT * FROM landscape_narratives WHERE run_id = ? ORDER BY rank
+                """,
+                (run_id,),
+            ).fetchall()
+            projects = connection.execute(
+                """
+                SELECT * FROM landscape_projects
+                WHERE run_id = ? ORDER BY narrative_id, rank
+                """,
+                (run_id,),
+            ).fetchall()
+            events = connection.execute(
+                "SELECT * FROM market_events WHERE run_id = ? ORDER BY event_index",
+                (run_id,),
+            ).fetchall()
+            assets = connection.execute(
+                "SELECT * FROM market_snapshots WHERE run_id = ? ORDER BY market_cap_usd DESC",
+                (run_id,),
+            ).fetchall()
+            trending = connection.execute(
+                "SELECT * FROM trending_snapshots WHERE run_id = ? ORDER BY search_rank",
+                (run_id,),
+            ).fetchall()
+            activity_count = connection.execute(
+                "SELECT COUNT(*) FROM protocol_activity_snapshots WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()[0]
+            run_history = connection.execute(
+                """
+                SELECT id, as_of, mode, status, started_at, completed_at, error
+                FROM runs ORDER BY started_at DESC LIMIT 8
+                """
+            ).fetchall()
+            previous = connection.execute(
+                """
+                SELECT r.id
+                FROM runs r
+                JOIN landscape_narratives n ON n.run_id = r.id
+                WHERE r.started_at < ? AND r.status = 'succeeded' AND r.mode = ?
+                GROUP BY r.id
+                ORDER BY r.started_at DESC
+                LIMIT 1
+                """,
+                (run["started_at"], run["mode"]),
+            ).fetchone()
+            previous_narratives = []
+            previous_projects = []
+            if previous:
+                previous_narratives = connection.execute(
+                    "SELECT narrative_id, score, state FROM landscape_narratives WHERE run_id = ?",
+                    (previous["id"],),
+                ).fetchall()
+                previous_projects = connection.execute(
+                    """
+                    SELECT narrative_id, project_id, score
+                    FROM landscape_projects WHERE run_id = ?
+                    """,
+                    (previous["id"],),
+                ).fetchall()
+
+        return {
+            "run": dict(run),
+            "research": dict(research),
+            "narratives": [dict(row) for row in narratives],
+            "projects": [dict(row) for row in projects],
+            "events": [dict(row) for row in events],
+            "assets": [dict(row) for row in assets],
+            "trending": [dict(row) for row in trending],
+            "protocol_activity_count": int(activity_count),
+            "run_history": [dict(row) for row in run_history],
+            "previous_run_id": previous["id"] if previous else None,
+            "previous_narratives": [dict(row) for row in previous_narratives],
+            "previous_projects": [dict(row) for row in previous_projects],
         }

@@ -2,52 +2,49 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from pathlib import Path
-from statistics import median
 from typing import Any, Protocol
 
 from openai import OpenAI
 
-from trader_pete.analysis import build_research_context, finalize_research
+from trader_pete.analysis.scoring import canonical_source_url, evidence_metrics
 from trader_pete.config import Settings
 from trader_pete.models import (
-    DailyNarrativeResearch,
-    DailyResearchDraft,
+    DailyLandscapeResearch,
+    LandscapeSnapshot,
     MarketDataBundle,
-    NarrativeResearchDraft,
-    NarrativeSignals,
+    MarketEvent,
+    NarrativeUpdate,
+    ProjectReview,
+    ProjectVerdict,
 )
 
-PROMPT_VERSION = "narrative-discovery-v2"
+PROMPT_VERSION = "stable-landscape-v3"
 
-SYSTEM_INSTRUCTIONS = """You are Trader Pete's candidate narrative research component.
-Discover a broad radar of crypto themes that could matter over the next 28 days. Do not simply
-repeat the largest categories. Search independently through three lanes: (1) newly verified events
-and scheduled catalysts, (2) related assets beginning to accelerate together, and (3) accelerating
-protocol usage. A one- or two-project idea is a theme seed, not a proven narrative.
+SYSTEM_INSTRUCTIONS = """You are Trader Pete's bounded crypto market researcher.
+The stable narrative taxonomy and deterministic quantitative rankings in the input are
+authoritative. You may explain or challenge them, but you must never create, rename, merge,
+or score a narrative. Use only supplied narrative IDs and project IDs. Do not produce price
+targets, purchases, allocations, or trade recommendations.
 
-Treat attention as reflexive evidence, never as proof of future returns. CoinGecko trending is
-search popularity, not organic sentiment. Do not claim to detect AI-written news or bots. Instead,
-trace each claim to its earliest root source, collapse syndication to that root, identify the
-publisher, and look for independent corroboration and contradictions. A social post or aggregator
-may discover a lead but cannot verify one. Prefer protocol documentation, governance proposals,
-regulatory filings, repository releases, on-chain records, verified company announcements, and
-reputable original reporting.
+Research at most five genuinely market-relevant root events from the last 72 hours or dated
+catalysts inside the next 28 days. Map every event to the supplied stable narratives. Prefer
+protocol or company announcements, filings, governance records, repositories, regulators,
+onchain data, and reputable original reporting. Trace syndicated coverage to its root, keep
+at most three independent roots per claim, and include contradictions. An aggregator or social
+post can discover a lead but cannot verify one. Do not treat CoinGecko trending as sentiment.
 
-Research concrete events from the last seven days plus dated catalysts in the next 28 days. Older
-sources may provide context but are not new evidence. Each source must state the atomic claim it
-supports, publisher, whether it is primary, and the root URL from which repetitions derive. Do not
-invent dates, metrics, sources, projects, or token relationships.
+For each focus narrative, state why the measured evidence matters now and the strongest
+counterpoint. Review no more than two supplied projects per focus narrative. A project review
+must separately cover mission, identifiable team/backing, shipped product and measured traction,
+community evidence, dated catalyst, and risks. Mark evidence unavailable when it cannot be
+verified. Do not call a project credible from branding, market capitalization, price performance,
+or anonymous social enthusiasm. Do not infer organic sentiment, bot prevalence, or AI-authored
+news without an auditable raw dataset.
 
-Only attention_acceleration, novelty, catalyst_strength, and crowding_risk are research judgments.
-Express each judgment on a 0-100 scale, never 0-1.
-Set attention_authenticity, market_confirmation, price_acceleration, breadth,
-fundamental_confirmation, evidence_quality, and concentration_risk to 0; deterministic code will
-replace them from the supplied snapshot and source provenance. Confidence describes the research
-packet's completeness, not return conviction. Use only supplied asset IDs and protocol IDs. Return
-no price targets, purchases, or trade recommendations.
-
-Return the requested structured object only."""
+Every source must include the atomic claim it supports, publisher, root URL, source type,
+publication date when known, whether it is primary, whether it supports or contradicts the claim,
+and a calibrated credibility value. Keep the market summary to three short sentences. Return the
+structured object only."""
 
 
 class ResearchConfigurationError(RuntimeError):
@@ -60,42 +57,31 @@ class ResponsesClient(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class ResearchOutput:
-    result: DailyNarrativeResearch
+    result: DailyLandscapeResearch
     prompt: str
     prompt_version: str
     response_id: str | None
 
 
-def _prompt(context: dict[str, object], candidate_narratives: int) -> str:
-    return (
-        f"As of {context['observed_at']}, discover and assess no more than "
-        f"{candidate_narratives} candidate narratives or theme seeds. Keep no more than four "
-        "deduplicated root sources per candidate. The input below is a bounded, quality-screened "
-        "market snapshot; it is not a list of conclusions.\n\n"
-        + json.dumps(context, sort_keys=True, separators=(",", ":"))
-    )
-
-
-class NarrativeResearcher:
+class LandscapeResearcher:
     def __init__(self, settings: Settings, client: ResponsesClient | None = None):
         self.settings = settings
         self._client = client
 
-    def research(self, bundle: MarketDataBundle, *, offline: bool) -> ResearchOutput:
-        context = build_research_context(bundle)
-        prompt = _prompt(context, self.settings.candidate_narratives)
+    def research(
+        self,
+        bundle: MarketDataBundle,
+        landscape: LandscapeSnapshot,
+        *,
+        offline: bool,
+    ) -> ResearchOutput:
+        prompt = _prompt(bundle, landscape)
         if offline:
-            draft = self._offline_draft(bundle)
+            result = _offline_result(landscape)
             response_id = None
         else:
-            draft, response_id = self._live_draft(prompt)
-
-        result = finalize_research(
-            draft,
-            bundle=bundle,
-            candidate_limit=self.settings.candidate_narratives,
-            shortlist_size=self.settings.max_narratives,
-        )
+            result, response_id = self._live_result(prompt)
+            result = _validate_result(result, landscape)
         return ResearchOutput(
             result=result,
             prompt=prompt,
@@ -103,90 +89,171 @@ class NarrativeResearcher:
             response_id=response_id,
         )
 
-    def _live_draft(self, prompt: str) -> tuple[DailyResearchDraft, str | None]:
+    def _live_result(self, prompt: str) -> tuple[DailyLandscapeResearch, str | None]:
         if not self.settings.openai_api_key and self._client is None:
             raise ResearchConfigurationError("Live research requires OPENAI_API_KEY.")
         client = self._client or OpenAI(api_key=self.settings.openai_api_key).responses
         response = client.parse(
             model=self.settings.model,
-            reasoning={
-                "effort": self.settings.reasoning_effort,
-                "context": "current_turn",
-            },
+            reasoning={"effort": self.settings.reasoning_effort, "context": "current_turn"},
             tools=[{"type": "web_search", "search_context_size": "medium"}],
             include=["web_search_call.action.sources"],
             input=prompt,
             instructions=SYSTEM_INSTRUCTIONS,
-            text_format=DailyResearchDraft,
+            text_format=DailyLandscapeResearch,
             store=False,
-            max_tool_calls=10,
-            max_output_tokens=10_000,
+            max_tool_calls=12,
+            max_output_tokens=12_000,
             text={"verbosity": "low"},
         )
         if response.output_parsed is None:
-            raise RuntimeError("OpenAI returned no structured narrative research result.")
+            raise RuntimeError("OpenAI returned no structured landscape research result.")
         return response.output_parsed, getattr(response, "id", None)
 
-    def _offline_draft(self, bundle: MarketDataBundle) -> DailyResearchDraft:
-        registry_path = Path(self.settings.root_dir, "config", "narratives.json")
-        definitions = json.loads(registry_path.read_text(encoding="utf-8"))
-        assets = {item.asset_id: item for item in bundle.assets}
-        categories = {item.category_id: item for item in bundle.categories}
-        benchmark = assets.get("bitcoin")
-        btc_7d = float(benchmark.change_7d_pct or 0) if benchmark else 0
-        btc_30d = float(benchmark.change_30d_pct or 0) if benchmark else 0
-        drafts: list[NarrativeResearchDraft] = []
 
-        for definition in definitions:
-            members = [assets[item] for item in definition["asset_ids"] if item in assets]
-            category_members = [
-                categories[item] for item in definition["category_ids"] if item in categories
-            ]
-            rel_30d = [float(item.change_30d_pct or 0) - btc_30d for item in members]
-            category_24h = [float(item.change_24h_pct or 0) for item in category_members]
-            category_strength = _median(category_24h)
-            signals = NarrativeSignals(
-                attention_acceleration=50,
-                novelty=45,
-                catalyst_strength=40,
-                market_confirmation=0,
-                breadth=0,
-                fundamental_confirmation=0,
-                crowding_risk=_clamp(45 + max(0, _median(rel_30d)) + category_strength),
-            )
-            drafts.append(
-                NarrativeResearchDraft(
-                    narrative_id=definition["id"],
-                    name=definition["name"],
-                    summary="Offline quantitative seed; live event evidence was not researched.",
-                    confidence_score=35,
-                    signals=signals,
-                    thesis="Relative market data warrants placing this theme on the radar.",
-                    counter_thesis=(
-                        "Fixture data cannot establish attention novelty, catalysts, or current "
-                        "investability."
-                    ),
-                    constituent_ids=definition["asset_ids"],
-                    protocol_ids=definition["protocol_ids"],
-                    sources=[],
-                )
-            )
+def _prompt(bundle: MarketDataBundle, landscape: LandscapeSnapshot) -> str:
+    focus_ids = {item.narrative_id for item in landscape.narratives if item.is_focus}
+    context = {
+        "as_of": landscape.as_of.isoformat(),
+        "market_regime": landscape.market_regime,
+        "stable_narratives": [
+            {
+                "id": item.narrative_id,
+                "name": item.name,
+                "description": item.description,
+                "state": item.state.value,
+                "is_focus": item.is_focus,
+                "score": item.score,
+                "confidence": item.confidence,
+                "measured_metrics": item.metrics.model_dump(mode="json"),
+            }
+            for item in landscape.narratives
+        ],
+        "focus_projects": [
+            {
+                "narrative_id": item.narrative_id,
+                "project_id": item.project_id,
+                "name": item.name,
+                "asset_id": item.asset_id,
+                "rank": item.rank,
+                "score": item.score,
+                "eligible": item.eligible,
+                "measured_metrics": item.metrics.model_dump(mode="json"),
+                "selection_notes": item.selection_notes,
+            }
+            for item in landscape.projects
+            if item.narrative_id in focus_ids and item.rank <= 3
+        ],
+        "search_trending": [
+            {
+                "asset_id": item.asset_id,
+                "name": item.name,
+                "search_rank": item.search_rank,
+                "market_cap_rank": item.market_cap_rank,
+            }
+            for item in bundle.trending_assets
+        ],
+        "known_measurement_limits": landscape.data_gaps,
+    }
+    return (
+        "Research the morning context around this fixed quantitative landscape. "
+        "Scores are supplied "
+        "for explanation only and must not be edited or repeated as recommendations.\n\n"
+        + json.dumps(context, sort_keys=True, separators=(",", ":"))
+    )
 
-        regime = "risk-on" if btc_7d > 3 else "risk-off" if btc_7d < -3 else "mixed"
-        return DailyResearchDraft(
-            as_of=bundle.observed_at,
-            market_regime=regime,
-            narratives=drafts,
-            data_gaps=[
-                "Offline fixture: no web, attention, catalyst, or current-event evidence was used.",
-                "Narrative scores are development fixtures, not current research.",
-            ],
+
+def _offline_result(landscape: LandscapeSnapshot) -> DailyLandscapeResearch:
+    focus = [item for item in landscape.narratives if item.is_focus]
+    updates = [
+        NarrativeUpdate(
+            narrative_id=item.narrative_id,
+            why_now=(
+                f"Measured project breadth and growth place {item.name} in the daily focus set."
+            ),
+            counterpoint="Offline mode contains no current event or project-quality verification.",
+            sources=[],
         )
+        for item in focus
+    ]
+    return DailyLandscapeResearch(
+        as_of=landscape.as_of,
+        market_summary=(
+            f"Offline fixture shows a {landscape.market_regime} quantitative regime. "
+            "No live news, catalyst, team, or community research was performed."
+        ),
+        key_events=[],
+        narrative_updates=updates,
+        project_reviews=[],
+        data_gaps=["Offline fixture: current events and project credibility were not researched."],
+    )
 
 
-def _median(values: list[float]) -> float:
-    return float(median(values)) if values else 0
+def _validate_result(
+    result: DailyLandscapeResearch, landscape: LandscapeSnapshot
+) -> DailyLandscapeResearch:
+    narrative_ids = {item.narrative_id for item in landscape.narratives}
+    focus_ids = {item.narrative_id for item in landscape.narratives if item.is_focus}
+    allowed_projects = {
+        (item.narrative_id, item.project_id)
+        for item in landscape.projects
+        if item.narrative_id in focus_ids and item.rank <= 3
+    }
+    events: list[MarketEvent] = []
+    for item in result.key_events[:5]:
+        mapped = [value for value in dict.fromkeys(item.narrative_ids) if value in narrative_ids]
+        if not mapped:
+            continue
+        events.append(
+            item.model_copy(
+                update={"narrative_ids": mapped, "sources": _dedupe_sources(item.sources, 3)}
+            )
+        )
+    updates: list[NarrativeUpdate] = []
+    seen_updates: set[str] = set()
+    for item in result.narrative_updates:
+        if item.narrative_id not in focus_ids or item.narrative_id in seen_updates:
+            continue
+        seen_updates.add(item.narrative_id)
+        updates.append(item.model_copy(update={"sources": _dedupe_sources(item.sources, 4)}))
+    reviews: list[ProjectReview] = []
+    seen_reviews: set[tuple[str, str]] = set()
+    per_narrative: dict[str, int] = {}
+    for item in result.project_reviews:
+        key = (item.narrative_id, item.project_id)
+        if key not in allowed_projects or key in seen_reviews:
+            continue
+        if per_narrative.get(item.narrative_id, 0) >= 2:
+            continue
+        sources = _dedupe_sources(item.sources, 5)
+        verdict = item.verdict
+        evidence = evidence_metrics(sources, as_of=result.as_of)
+        if verdict is ProjectVerdict.CREDIBLE and not evidence["verified"]:
+            verdict = ProjectVerdict.MIXED if sources else ProjectVerdict.INSUFFICIENT
+        reviews.append(item.model_copy(update={"sources": sources, "verdict": verdict}))
+        seen_reviews.add(key)
+        per_narrative[item.narrative_id] = per_narrative.get(item.narrative_id, 0) + 1
+    gaps = list(result.data_gaps)
+    if len(updates) < len(focus_ids):
+        gaps.append("Not every quantitative focus narrative received a verified research update.")
+    if not events:
+        gaps.append("No qualifying root event was verified for the morning brief.")
+    return result.model_copy(
+        update={
+            "key_events": events,
+            "narrative_updates": updates,
+            "project_reviews": reviews,
+            "data_gaps": list(dict.fromkeys(gaps)),
+        }
+    )
 
 
-def _clamp(value: float) -> float:
-    return round(max(0, min(100, value)), 1)
+def _dedupe_sources(sources, limit: int):
+    selected = {}
+    for source in sources:
+        root = canonical_source_url(source.root_url or source.url)
+        selected.setdefault(root, source)
+    return list(selected.values())[:limit]
+
+
+NarrativeResearcher = LandscapeResearcher
