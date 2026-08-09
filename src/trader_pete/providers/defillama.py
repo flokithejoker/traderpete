@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -23,6 +25,7 @@ class DefiLlamaClient:
     protocol_limit: int = 1_500
     activity_limit: int = 750
     minimum_tvl_usd: float = 1_000_000
+    _last_request_record: dict[str, object] = field(default_factory=dict, init=False, repr=False)
 
     def collect(
         self,
@@ -34,12 +37,15 @@ class DefiLlamaClient:
     ]:
         observed_at = utc_now()
         protocol_payload = self._get("/protocols", {})
+        protocol_request = dict(self._last_request_record)
         activity_requests = [
             ("/overview/fees", ActivityMetricType.FEES, "dailyFees"),
             ("/overview/fees", ActivityMetricType.REVENUE, "dailyRevenue"),
             ("/overview/dexs", ActivityMetricType.DEX_VOLUME, "dailyVolume"),
         ]
-        activity_payloads: list[tuple[str, ActivityMetricType, str, dict[str, Any]]] = []
+        activity_payloads: list[
+            tuple[str, ActivityMetricType, str, dict[str, Any], dict[str, object] | None]
+        ] = []
         for endpoint, metric_type, data_type in activity_requests:
             try:
                 payload = self._get(
@@ -52,32 +58,69 @@ class DefiLlamaClient:
                 )
             except RuntimeError as error:
                 payload = {"protocols": [], "collection_error": str(error)}
-            activity_payloads.append((endpoint, metric_type, data_type, payload))
+                request_record = None
+            else:
+                request_record = dict(self._last_request_record)
+            activity_payloads.append((endpoint, metric_type, data_type, payload, request_record))
 
         protocols = self._select_protocols(protocol_payload, observed_at)
         activity = [
             metric
-            for _, metric_type, _, payload in activity_payloads
+            for _, metric_type, _, payload, _ in activity_payloads
             for metric in self._select_activity(payload, metric_type, observed_at)
         ]
         batches = [
-            ProviderBatch(
+            self._batch(
                 provider="defillama",
                 endpoint="/protocols",
                 observed_at=observed_at,
                 payload=protocol_payload,
+                request_manifest=[protocol_request],
             ),
             *[
-                ProviderBatch(
+                self._batch(
                     provider="defillama",
                     endpoint=f"{endpoint}?dataType={data_type}",
                     observed_at=observed_at,
                     payload=payload,
+                    request_manifest=[request_record] if request_record else [],
                 )
-                for endpoint, _, data_type, payload in activity_payloads
+                for endpoint, _, data_type, payload, request_record in activity_payloads
             ],
         ]
         return protocols, activity, batches, observed_at
+
+    def _batch(
+        self,
+        *,
+        provider: str,
+        endpoint: str,
+        observed_at: datetime,
+        payload: Any,
+        request_manifest: list[dict[str, object]] | None = None,
+    ) -> ProviderBatch:
+        # An explicit empty manifest represents a failed/unreceived response.
+        # Falling back here would misattribute the preceding successful request.
+        manifest = (
+            request_manifest
+            if request_manifest is not None
+            else ([dict(self._last_request_record)] if self._last_request_record else [])
+        )
+        fingerprint = hashlib.sha256(
+            json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        latest = manifest[-1] if manifest else {}
+        return ProviderBatch(
+            provider=provider,
+            endpoint=endpoint,
+            observed_at=observed_at,
+            payload=payload,
+            request_params_hash=fingerprint,
+            response_received_at=latest.get("received_at"),
+            http_status=latest.get("status"),
+            content_type=latest.get("content_type"),
+            request_manifest=manifest,
+        )
 
     def _get(self, endpoint: str, params: dict[str, object]) -> Any:
         last_error: Exception | None = None
@@ -88,6 +131,13 @@ class DefiLlamaClient:
                         endpoint, params=params, headers={"accept": "application/json"}
                     )
                     response.raise_for_status()
+                    self._last_request_record = {
+                        "url": f"{self.base_url}{endpoint}",
+                        "params": params,
+                        "received_at": utc_now().isoformat(),
+                        "status": response.status_code,
+                        "content_type": response.headers.get("content-type"),
+                    }
                     return response.json()
             except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError) as error:
                 last_error = error

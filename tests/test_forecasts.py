@@ -12,6 +12,7 @@ from trader_pete.models import (
     DynamicNarrativeState,
     DynamicRadarSnapshot,
     MarketAsset,
+    PaperEvaluation,
     RunMode,
     RunStatus,
 )
@@ -131,6 +132,190 @@ def test_same_day_reruns_create_one_canonical_cohort(tmp_path: Path) -> None:
 
     assert raw == 2
     assert canonical == 1
+
+
+def test_failed_legacy_canonical_claim_is_replaceable(tmp_path: Path) -> None:
+    database = Database(tmp_path / "test.db")
+    database.initialize()
+    policy = StrategyPolicy.load(Path.cwd() / "config/strategy_policy.json")
+    as_of = datetime(2026, 1, 1, 8, tzinfo=UTC)
+    failed, _ = _store_run(database, as_of=as_of, policy=policy, status=RunStatus.FAILED)
+    with database.connect() as connection:
+        cohort = connection.execute(
+            "SELECT policy_hash, run_mode, decision_date FROM forecast_cohorts "
+            "WHERE run_id = ? LIMIT 1",
+            (failed,),
+        ).fetchone()
+        connection.execute(
+            "INSERT INTO canonical_runs "
+            "(policy_hash, run_mode, decision_date, run_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (*cohort, failed, as_of.isoformat()),
+        )
+        connection.execute(
+            "UPDATE forecast_cohorts SET is_canonical = 1 WHERE run_id = ?", (failed,)
+        )
+
+    valid, _ = _store_run(database, as_of=as_of + timedelta(hours=1), policy=policy)
+    assert database.finalize_canonical_run(valid)
+    with database.connect() as connection:
+        selected = connection.execute(
+            "SELECT run_id FROM canonical_runs WHERE decision_date = ?",
+            (as_of.date().isoformat(),),
+        ).fetchone()[0]
+    assert selected == valid
+
+
+def test_running_canonical_claim_is_removed_when_daily_workflow_fails(tmp_path: Path) -> None:
+    database = Database(tmp_path / "test.db")
+    database.initialize()
+    policy = StrategyPolicy.load(Path.cwd() / "config/strategy_policy.json")
+    as_of = datetime(2026, 1, 1, 8, tzinfo=UTC)
+    run_id = database.create_run(as_of=as_of, mode=RunMode.LIVE, config={})
+    database.store_market_assets(run_id, _assets(as_of))
+    database.store_dynamic_research(
+        run_id=run_id,
+        radar=_radar(as_of),
+        result=DailyLandscapeResearch(as_of=as_of, market_summary="Test"),
+        social_metrics=[],
+        model="test",
+        reasoning_effort="low",
+        prompt_version="test",
+        prompt="test",
+        response_id=None,
+        policy=policy,
+        run_mode=RunMode.LIVE,
+    )
+    assert database.finalize_canonical_run(run_id)
+
+    database.finish_run(run_id, RunStatus.FAILED, error="decision stage failed")
+    with database.connect() as connection:
+        claim_count = connection.execute(
+            "SELECT COUNT(*) FROM canonical_runs WHERE run_id = ?", (run_id,)
+        ).fetchone()[0]
+        canonical_cohorts = connection.execute(
+            "SELECT COUNT(*) FROM forecast_cohorts WHERE run_id = ? AND is_canonical = 1",
+            (run_id,),
+        ).fetchone()[0]
+    assert claim_count == 0
+    assert canonical_cohorts == 0
+
+
+def test_abandoned_running_canonical_lease_is_superseded(tmp_path: Path) -> None:
+    database = Database(tmp_path / "test.db")
+    database.initialize()
+    policy = StrategyPolicy.load(Path.cwd() / "config/strategy_policy.json")
+    as_of = datetime(2026, 1, 1, 8, tzinfo=UTC)
+
+    def prepare_running_run(at: datetime) -> str:
+        run_id = database.create_run(as_of=at, mode=RunMode.LIVE, config={})
+        database.store_market_assets(run_id, _assets(at))
+        database.store_dynamic_research(
+            run_id=run_id,
+            radar=_radar(at),
+            result=DailyLandscapeResearch(as_of=at, market_summary="Test"),
+            social_metrics=[],
+            model="test",
+            reasoning_effort="low",
+            prompt_version="test",
+            prompt="test",
+            response_id=None,
+            policy=policy,
+            run_mode=RunMode.LIVE,
+        )
+        return run_id
+
+    abandoned = prepare_running_run(as_of)
+    assert database.finalize_canonical_run(abandoned)
+    replacement = prepare_running_run(as_of + timedelta(hours=1))
+    assert not database.finalize_canonical_run(replacement)
+    with database.connect() as connection:
+        assert (
+            connection.execute("SELECT status FROM runs WHERE id = ?", (abandoned,)).fetchone()[0]
+            == "running"
+        )
+        connection.execute(
+            "UPDATE canonical_runs SET created_at = ? WHERE run_id = ?",
+            ((datetime.now(UTC) - timedelta(hours=3)).isoformat(), abandoned),
+        )
+    assert database.finalize_canonical_run(replacement)
+
+    with database.connect() as connection:
+        abandoned_row = connection.execute(
+            "SELECT status, workflow_complete FROM runs WHERE id = ?", (abandoned,)
+        ).fetchone()
+        selected = connection.execute(
+            "SELECT run_id FROM canonical_runs WHERE decision_date = ?",
+            (as_of.date().isoformat(),),
+        ).fetchone()[0]
+    assert dict(abandoned_row) == {"status": "failed", "workflow_complete": 0}
+    assert selected == replacement
+    with pytest.raises(ValueError, match="running run"):
+        database.complete_daily_run(abandoned)
+
+
+def test_noncanonical_same_day_rerun_completes_as_diagnostic(tmp_path: Path) -> None:
+    database = Database(tmp_path / "test.db")
+    database.initialize()
+    policy = StrategyPolicy.load(Path.cwd() / "config/strategy_policy.json")
+    as_of = datetime(2026, 1, 1, 8, tzinfo=UTC)
+
+    def prepare(at: datetime) -> tuple[str, bool]:
+        run_id = database.create_run(as_of=at, mode=RunMode.LIVE, config={})
+        database.store_market_assets(run_id, _assets(at))
+        database.store_dynamic_research(
+            run_id=run_id,
+            radar=_radar(at),
+            result=DailyLandscapeResearch(as_of=at, market_summary="Test"),
+            social_metrics=[],
+            model="test",
+            reasoning_effort="low",
+            prompt_version="test",
+            prompt="test",
+            response_id=None,
+            policy=policy,
+            run_mode=RunMode.LIVE,
+        )
+        canonical = database.finalize_canonical_run(run_id)
+        database.finalize_paper_decision(
+            run_id=run_id,
+            evaluation=PaperEvaluation(
+                as_of=at,
+                policy_hash=policy.policy_hash,
+                prospective_days=1,
+            ),
+            policy=policy,
+            is_canonical=canonical,
+            run_mode=RunMode.LIVE,
+        )
+        database.complete_daily_run(run_id)
+        return run_id, canonical
+
+    canonical_run, canonical = prepare(as_of)
+    diagnostic_run, diagnostic = prepare(as_of + timedelta(hours=1))
+
+    assert canonical
+    assert not diagnostic
+    with database.connect() as connection:
+        rows = connection.execute(
+            "SELECT id, status, workflow_complete FROM runs WHERE id IN (?, ?)",
+            (canonical_run, diagnostic_run),
+        ).fetchall()
+    assert all(row["status"] == "succeeded" and row["workflow_complete"] for row in rows)
+
+
+def test_running_observation_cannot_write_forecast_outcomes(tmp_path: Path) -> None:
+    database = Database(tmp_path / "test.db")
+    database.initialize()
+    as_of = datetime(2026, 1, 1, 8, tzinfo=UTC)
+    run_id = database.create_run(as_of=as_of, mode=RunMode.LIVE, config={})
+
+    with pytest.raises(ValueError, match="completed succeeded"):
+        database.record_forecast_outcomes(
+            observation_run_id=run_id,
+            observed_at=as_of,
+            assets=_assets(as_of),
+        )
 
 
 def test_failed_observation_cannot_mature_outcome(tmp_path: Path) -> None:

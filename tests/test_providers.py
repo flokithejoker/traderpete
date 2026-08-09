@@ -1,14 +1,33 @@
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from trader_pete.config import Settings
+from trader_pete.config import Settings, StrategyPolicy
 from trader_pete.db import Database
-from trader_pete.models import ActivityMetricType, RunMode
+from trader_pete.models import (
+    ActivityMetricType,
+    ProviderBatch,
+    RunMode,
+    SocialCoverage,
+    TokenIdentitySnapshot,
+)
 from trader_pete.providers import collect_market_data
 from trader_pete.providers.coingecko import CoinGeckoClient, ProviderConfigurationError
 from trader_pete.providers.defillama import DefiLlamaClient
+from trader_pete.providers.investability import InvestabilityCollector
+
+
+def test_provider_payload_accepts_ohlc_array_rows() -> None:
+    batch = ProviderBatch(
+        provider="coingecko",
+        endpoint="/coins/alpha/ohlc",
+        observed_at=datetime(2026, 8, 9, tzinfo=UTC),
+        payload=[[1_786_291_200_000, 100.0, 102.0, 99.0, 101.0]],
+    )
+
+    assert batch.payload[0][4] == 101.0
 
 
 def test_fixture_bundle_is_point_in_time_and_complete(tmp_path: Path, monkeypatch) -> None:
@@ -97,3 +116,89 @@ def test_defillama_activity_parser_uses_week_over_week_growth() -> None:
     )
 
     assert metric.growth_7d_pct == 0
+
+
+def test_provider_batches_keep_exact_endpoint_request_manifests() -> None:
+    observed_at = datetime(2026, 8, 9, tzinfo=UTC)
+    coin_gecko = CoinGeckoClient("demo", "https://api.coingecko.test", "x-demo")
+    market_request = {
+        "url": "https://api.coingecko.test/coins/markets",
+        "params": {"page": 1},
+        "received_at": observed_at.isoformat(),
+        "status": 200,
+        "content_type": "application/json",
+    }
+    coin_gecko._last_request_record = {
+        **market_request,
+        "url": "https://api.coingecko.test/search/trending",
+    }
+    market_batch = coin_gecko._batch(
+        provider="coingecko",
+        endpoint="/coins/markets",
+        observed_at=observed_at,
+        payload=[],
+        request_manifest=[market_request],
+    )
+
+    llama = DefiLlamaClient()
+    llama._last_request_record = {
+        "url": "https://api.llama.fi/protocols",
+        "params": {},
+        "received_at": observed_at.isoformat(),
+        "status": 200,
+        "content_type": "application/json",
+    }
+    failed_batch = llama._batch(
+        provider="defillama",
+        endpoint="/overview/fees?dataType=dailyFees",
+        observed_at=observed_at,
+        payload={"protocols": [], "collection_error": "timeout"},
+        request_manifest=[],
+    )
+
+    assert market_batch.request_manifest == [market_request]
+    assert market_batch.request_manifest[0]["url"].endswith("/coins/markets")
+    assert failed_batch.request_manifest == []
+    assert failed_batch.http_status is None
+
+
+def test_goplus_partial_response_and_proxy_status_are_preserved(
+    tmp_path: Path, monkeypatch
+) -> None:
+    settings = replace(Settings.from_env(tmp_path), etherscan_api_key=None)
+    policy = StrategyPolicy.load(Path.cwd() / "config" / "strategy_policy.json")
+    collector = InvestabilityCollector(settings, policy)
+    identity = TokenIdentitySnapshot(
+        asset_id="alpha",
+        symbol="ALPHA",
+        name="Alpha",
+        observed_at=datetime(2026, 8, 9, tzinfo=UTC),
+        chain_id="ethereum",
+        contract_address="0x0000000000000000000000000000000000000001",
+        contract_candidates={"ethereum": "0x0000000000000000000000000000000000000001"},
+    )
+
+    def fake_get(self, url, params):
+        return {
+            "code": 2,
+            "result": {
+                identity.contract_address: {
+                    "is_proxy": "1",
+                    "is_open_source": "1",
+                    "is_honeypot": "0",
+                    "cannot_buy": "0",
+                    "cannot_sell_all": "0",
+                    "is_blacklisted": "0",
+                    "hidden_owner": "0",
+                    "can_take_back_ownership": "0",
+                    "owner_change_balance": "0",
+                }
+            },
+        }
+
+    monkeypatch.setattr(InvestabilityCollector, "_get_json", fake_get)
+    security, _ = collector._security(identity, identity.observed_at)
+
+    assert security.coverage is SocialCoverage.PARTIAL
+    assert security.is_proxy is True
+    assert security.proxy_implementation_verified is None

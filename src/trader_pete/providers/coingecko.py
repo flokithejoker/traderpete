@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -27,6 +29,7 @@ class CoinGeckoClient:
     base_url: str
     header_name: str
     timeout_seconds: float = 30
+    _last_request_record: dict[str, object] = field(default_factory=dict, init=False, repr=False)
 
     @classmethod
     def from_settings(cls, settings: Settings) -> CoinGeckoClient:
@@ -54,6 +57,13 @@ class CoinGeckoClient:
                 with httpx.Client(base_url=self.base_url, timeout=self.timeout_seconds) as client:
                     response = client.get(endpoint, params=params, headers=headers)
                     response.raise_for_status()
+                    self._last_request_record = {
+                        "url": f"{self.base_url}{endpoint}",
+                        "params": params,
+                        "received_at": utc_now().isoformat(),
+                        "status": response.status_code,
+                        "content_type": response.headers.get("content-type"),
+                    }
                     return response.json()
             except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError) as error:
                 last_error = error
@@ -83,6 +93,7 @@ class CoinGeckoClient:
     ]:
         observed_at = utc_now()
         markets_payload: list[dict[str, Any]] = []
+        market_requests: list[dict[str, object]] = []
         for page in range(1, 5):
             try:
                 page_payload = self._get(
@@ -101,10 +112,13 @@ class CoinGeckoClient:
                     raise
                 break
             markets_payload.extend(page_payload)
+            market_requests.append(dict(self._last_request_record))
             if len(page_payload) < 250:
                 break
         categories_payload = self._get("/coins/categories", {"order": "market_cap_desc"})
+        category_request = dict(self._last_request_record)
         trending_payload = self._get("/search/trending", {})
+        trending_request = dict(self._last_request_record)
 
         assets = [self._parse_asset(item, observed_at) for item in markets_payload]
         trending_assets = [
@@ -116,6 +130,7 @@ class CoinGeckoClient:
         requested_ids.update(item.asset_id for item in trending_assets)
         missing_asset_ids = sorted(requested_ids - known_ids)
         requested_markets_payload: list[dict[str, Any]] = []
+        requested_market_request: dict[str, object] | None = None
         if missing_asset_ids:
             requested_markets_payload = self._get(
                 "/coins/markets",
@@ -129,41 +144,78 @@ class CoinGeckoClient:
                     "price_change_percentage": "24h,7d,30d",
                 },
             )
+            requested_market_request = dict(self._last_request_record)
             assets.extend(
                 self._parse_asset(item, observed_at) for item in requested_markets_payload
             )
         assets = list({asset.asset_id: asset for asset in assets}.values())
         categories = [self._parse_category(item, observed_at) for item in categories_payload]
         payloads = [
-            ProviderBatch(
+            self._batch(
                 provider="coingecko",
                 endpoint="/coins/markets?universe=top1000-best-effort",
                 observed_at=observed_at,
                 payload=markets_payload,
+                request_manifest=market_requests,
             ),
-            ProviderBatch(
+            self._batch(
                 provider="coingecko",
                 endpoint="/coins/categories",
                 observed_at=observed_at,
                 payload=categories_payload,
+                request_manifest=[category_request],
             ),
-            ProviderBatch(
+            self._batch(
                 provider="coingecko",
                 endpoint="/search/trending",
                 observed_at=observed_at,
                 payload=trending_payload,
+                request_manifest=[trending_request],
             ),
         ]
         if requested_markets_payload:
             payloads.append(
-                ProviderBatch(
+                self._batch(
                     provider="coingecko",
                     endpoint="/coins/markets?universe=registry-and-trending",
                     observed_at=observed_at,
                     payload=requested_markets_payload,
+                    request_manifest=[requested_market_request] if requested_market_request else [],
                 )
             )
         return assets, categories, trending_assets, payloads, observed_at
+
+    def _batch(
+        self,
+        *,
+        provider: str,
+        endpoint: str,
+        observed_at: datetime,
+        payload: Any,
+        request_manifest: list[dict[str, object]] | None = None,
+    ) -> ProviderBatch:
+        # An explicit empty manifest means that no provider response was received.
+        # Do not accidentally attach the preceding request to a failed endpoint.
+        manifest = (
+            request_manifest
+            if request_manifest is not None
+            else ([dict(self._last_request_record)] if self._last_request_record else [])
+        )
+        fingerprint = hashlib.sha256(
+            json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        latest = manifest[-1] if manifest else {}
+        return ProviderBatch(
+            provider=provider,
+            endpoint=endpoint,
+            observed_at=observed_at,
+            payload=payload,
+            request_params_hash=fingerprint,
+            response_received_at=latest.get("received_at"),
+            http_status=latest.get("status"),
+            content_type=latest.get("content_type"),
+            request_manifest=manifest,
+        )
 
     @staticmethod
     def _parse_asset(item: dict[str, Any], observed_at: datetime) -> MarketAsset:

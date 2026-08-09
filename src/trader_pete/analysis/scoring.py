@@ -57,8 +57,25 @@ def source_domain(url: str) -> str:
     return (urlsplit(url).hostname or "unknown").lower().removeprefix("www.")
 
 
+def source_origin(url: str) -> str:
+    """Conservatively group pages/subdomains owned by one registered domain."""
+    host = source_domain(url)
+    labels = [value for value in host.split(".") if value]
+    if len(labels) <= 2:
+        return host
+    compound_suffixes = {"co.uk", "org.uk", "gov.uk", "com.au", "com.br", "co.jp"}
+    suffix = ".".join(labels[-2:])
+    return ".".join(labels[-3:]) if suffix in compound_suffixes else suffix
+
+
 def is_primary_source(source: EvidenceSource) -> bool:
-    domain = source_domain(source.url)
+    return is_authoritative_url(source.url)
+
+
+def is_authoritative_url(url: str) -> bool:
+    domain = source_domain(url)
+    if domain.endswith(".example"):
+        return False
     return domain in AUTHORITATIVE_DOMAINS or any(
         domain.endswith(f".{value}") for value in AUTHORITATIVE_DOMAINS
     )
@@ -93,14 +110,20 @@ def evidence_metrics(
             "recent_sources_30d": 0,
             "verified": 0,
         }
-    roots = {
-        canonical_source_url(source.root_url or source.url)
+    root_sources = [
+        source
         for source in sources
+        if not any(
+            marker in source.source_type.lower()
+            for marker in ("aggregator", "social", "promotional")
+        )
+    ]
+    roots = {
+        source_origin(source.root_url or source.url)
+        for source in root_sources
         if source.root_url or source.url
     }
-    publishers = {
-        (source.publisher.strip().lower() or source_domain(source.url)) for source in sources
-    }
+    publishers = roots
     primary_count = sum(is_primary_source(source) for source in sources)
     contradictions = sum(not source.supports for source in sources)
     recency_scores: list[float] = []

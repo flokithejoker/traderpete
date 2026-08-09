@@ -25,7 +25,7 @@ def _draft(as_of: datetime) -> DailyDynamicNarrativeDraft:
             url="https://protocol.example/releases/1",
             root_url="https://protocol.example/releases/1",
             publisher="Protocol",
-            claim="Three protocols shipped related fee-producing products.",
+            claim="Perpetual protocol product releases shipped across three projects.",
             source_type="official_announcement",
             published_at=as_of,
             credibility=0.8,
@@ -35,7 +35,7 @@ def _draft(as_of: datetime) -> DailyDynamicNarrativeDraft:
             url="https://data.example/perps",
             root_url="https://data.example/perps",
             publisher="Data Lab",
-            claim="Fees and volume accelerated across the cluster.",
+            claim="Perpetual protocol fees and volume accelerated across the cluster.",
             source_type="data",
             published_at=as_of,
             credibility=0.8,
@@ -53,6 +53,9 @@ def _draft(as_of: datetime) -> DailyDynamicNarrativeDraft:
                 protocol_ids=["hyperliquid", "pendle", "ethena"],
                 discovery_lanes=["event", "market", "fundamental"],
                 catalyst="Related product releases during the next four weeks.",
+                event_subject="Perpetual protocol product release",
+                event_type="protocol_release",
+                event_at=as_of,
                 counter_thesis="Recent returns may already price in activity growth.",
                 aliases=["perp DEX revenue"],
                 sources=sources,
@@ -192,3 +195,130 @@ def test_social_diagnostics_do_not_change_research_priority() -> None:
     assert with_social.score == without_social.score
     assert with_social.metrics.overheat_risk == without_social.metrics.overheat_risk
     assert with_social.metrics.social_sentiment == 100
+
+
+def test_unrelated_articles_cannot_manufacture_an_event_lane() -> None:
+    settings = Settings.from_env(Path.cwd())
+    bundle = collect_market_data(settings, RunMode.OFFLINE)
+    parent_ids = {
+        item.id for item in load_narrative_registry(settings.root_dir / "config/narratives.json")
+    }
+    candidate = (
+        _draft(bundle.observed_at)
+        .candidates[0]
+        .model_copy(
+            update={
+                "event_subject": "SpaceX regulatory approval",
+                "event_type": "regulatory approval",
+                "event_at": bundle.observed_at,
+                "sources": [
+                    EvidenceSource(
+                        title="SpaceX lockup",
+                        url="https://news-one.example/spacex-lockup",
+                        publisher="News One",
+                        claim="SpaceX insiders discussed an employee share lockup.",
+                        source_type="original_reporting",
+                        published_at=bundle.observed_at,
+                        credibility=0.8,
+                    ),
+                    EvidenceSource(
+                        title="SpaceX launch",
+                        url="https://news-two.example/spacex-launch",
+                        publisher="News Two",
+                        claim="SpaceX completed a commercial satellite launch.",
+                        source_type="original_reporting",
+                        published_at=bundle.observed_at,
+                        credibility=0.8,
+                    ),
+                ],
+            }
+        )
+    )
+
+    result = build_dynamic_radar(
+        DailyDynamicNarrativeDraft(as_of=bundle.observed_at, candidates=[candidate]),
+        bundle=bundle,
+        parent_ids=parent_ids,
+        history=[],
+    ).narratives[0]
+
+    assert result.metrics.independent_event_count == 0
+    assert "event" not in result.discovery_lanes
+
+
+def test_short_event_type_must_appear_in_each_event_claim() -> None:
+    settings = Settings.from_env(Path.cwd())
+    bundle = collect_market_data(settings, RunMode.OFFLINE)
+    parent_ids = {
+        item.id for item in load_narrative_registry(settings.root_dir / "config/narratives.json")
+    }
+    candidate = (
+        _draft(bundle.observed_at)
+        .candidates[0]
+        .model_copy(
+            update={
+                "event_subject": "SpaceX IPO",
+                "event_type": "IPO",
+                "event_at": bundle.observed_at,
+                "sources": [
+                    EvidenceSource(
+                        title="Lockup",
+                        url="https://one.example/lockup",
+                        publisher="One",
+                        claim="SpaceX employees discussed a share lockup.",
+                        source_type="original_reporting",
+                        published_at=bundle.observed_at,
+                        credibility=0.8,
+                    ),
+                    EvidenceSource(
+                        title="Launch",
+                        url="https://two.example/launch",
+                        publisher="Two",
+                        claim="SpaceX completed a satellite launch.",
+                        source_type="original_reporting",
+                        published_at=bundle.observed_at,
+                        credibility=0.8,
+                    ),
+                ],
+            }
+        )
+    )
+
+    result = build_dynamic_radar(
+        DailyDynamicNarrativeDraft(as_of=bundle.observed_at, candidates=[candidate]),
+        bundle=bundle,
+        parent_ids=parent_ids,
+        history=[],
+    ).narratives[0]
+
+    assert result.metrics.independent_event_count == 0
+    assert "event" not in result.discovery_lanes
+
+
+def test_event_subject_must_name_an_entity_beyond_the_event_type() -> None:
+    settings = Settings.from_env(Path.cwd())
+    bundle = collect_market_data(settings, RunMode.OFFLINE)
+    parent_ids = {
+        item.id for item in load_narrative_registry(settings.root_dir / "config/narratives.json")
+    }
+    candidate = (
+        _draft(bundle.observed_at)
+        .candidates[0]
+        .model_copy(
+            update={
+                "event_subject": "IPO",
+                "event_type": "IPO",
+                "event_at": bundle.observed_at,
+            }
+        )
+    )
+
+    result = build_dynamic_radar(
+        DailyDynamicNarrativeDraft(as_of=bundle.observed_at, candidates=[candidate]),
+        bundle=bundle,
+        parent_ids=parent_ids,
+        history=[],
+    ).narratives[0]
+
+    assert result.metrics.independent_event_count == 0
+    assert "event" not in result.discovery_lanes

@@ -6,6 +6,7 @@ from trader_pete.config import Settings
 from trader_pete.db import Database
 from trader_pete.models import RunMode
 from trader_pete.pipeline import run_daily
+from trader_pete.reporting.dashboard import DashboardRenderer
 
 
 def test_offline_pipeline_writes_ledger_and_self_contained_report(tmp_path: Path) -> None:
@@ -34,7 +35,7 @@ def test_offline_pipeline_writes_ledger_and_self_contained_report(tmp_path: Path
 
     with Database(settings.db_path).connect() as connection:
         run = connection.execute(
-            "SELECT status FROM runs WHERE id = ?", (result.run_id,)
+            "SELECT status, workflow_complete FROM runs WHERE id = ?", (result.run_id,)
         ).fetchone()
         artifact = connection.execute(
             "SELECT sha256 FROM dashboard_artifacts WHERE run_id = ?", (result.run_id,)
@@ -53,6 +54,7 @@ def test_offline_pipeline_writes_ledger_and_self_contained_report(tmp_path: Path
         ).fetchone()[0]
 
     assert run["status"] == "succeeded"
+    assert run["workflow_complete"] == 1
     assert artifact["sha256"] == hashlib.sha256(result.report_path.read_bytes()).hexdigest()
     assert narratives == 14
     assert projects >= 60
@@ -74,3 +76,26 @@ def test_same_day_runs_create_distinct_immutable_reports(tmp_path: Path) -> None
     assert first.report_path != second.report_path
     assert first.report_path.exists()
     assert second.report_path.exists()
+
+
+def test_live_dashboard_without_provider_timestamp_is_not_labelled_offline(
+    tmp_path: Path,
+) -> None:
+    base = Settings.from_env(Path.cwd())
+    settings = replace(
+        base,
+        db_path=tmp_path / "data" / "test.db",
+        reports_dir=tmp_path / "reports",
+    )
+    result = run_daily(settings, RunMode.OFFLINE)
+    database = Database(settings.db_path)
+    with database.connect() as connection:
+        connection.execute("UPDATE runs SET mode = 'live' WHERE id = ?", (result.run_id,))
+
+    artifact = DashboardRenderer(database=database, reports_dir=settings.reports_dir).render(
+        result.run_id
+    )
+    html = artifact.path.read_text(encoding="utf-8")
+
+    assert "provider response unavailable or failed" in html
+    assert "offline fixture · no provider fetch" not in html

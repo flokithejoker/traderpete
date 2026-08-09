@@ -7,7 +7,7 @@ from typing import Any, Protocol
 from openai import OpenAI
 
 from trader_pete.analysis.context import build_research_context
-from trader_pete.analysis.scoring import canonical_source_url
+from trader_pete.analysis.scoring import canonical_source_url, is_primary_source
 from trader_pete.config import Settings
 from trader_pete.models import (
     DailyDynamicNarrativeDraft,
@@ -15,7 +15,7 @@ from trader_pete.models import (
     MarketDataBundle,
 )
 
-PROMPT_VERSION = "dynamic-radar-v2"
+PROMPT_VERSION = "dynamic-radar-v3"
 
 SYSTEM_INSTRUCTIONS = """You are Trader Pete's bounded dynamic crypto-narrative scout.
 Discover narrow, economically coherent, time-bounded narratives that may be emerging now.
@@ -37,6 +37,11 @@ Trace news to auditable roots; syndicated copies remain one evidence origin. Pre
 announcements, governance records, repositories, regulators, on-chain data, and original
 reporting. Include contradictions and promotional-source limitations. Social chatter alone cannot
 verify a narrative and must be labelled as a social discovery lane.
+Label event evidence with a concrete event/catalyst source type and an atomic claim. Background
+explainers or generic sector commentary are not event confirmation.
+For an event lane, provide one normalized event subject, event type, and event timestamp. Two
+independent retrieved roots must make claims that explicitly name that same subject. Articles are
+evidence for an event; they are never separate events.
 
 The supplied input context is not a source. Never cite an input:// URL or restate the input as
 external evidence; every returned source must be an HTTP(S) URL retrieved through web search.
@@ -55,6 +60,8 @@ class DynamicResearchOutput:
     prompt: str
     prompt_version: str
     response_id: str | None
+    retrieved_urls: tuple[str, ...]
+    retrieval_manifest: tuple[dict[str, Any], ...]
 
 
 class DynamicNarrativeResearcher:
@@ -79,8 +86,10 @@ class DynamicNarrativeResearcher:
                 ],
             )
             response_id = None
+            retrieved_urls: set[str] = set()
+            retrieval_manifest: list[dict[str, Any]] = []
         else:
-            result, response_id, retrieved_urls = self._live_result(prompt)
+            result, response_id, retrieved_urls, retrieval_manifest = self._live_result(prompt)
             result = _validate_result(
                 result,
                 bundle,
@@ -93,9 +102,13 @@ class DynamicNarrativeResearcher:
             prompt=prompt,
             prompt_version=PROMPT_VERSION,
             response_id=response_id,
+            retrieved_urls=tuple(sorted(retrieved_urls)),
+            retrieval_manifest=tuple(retrieval_manifest),
         )
 
-    def _live_result(self, prompt: str) -> tuple[DailyDynamicNarrativeDraft, str | None, set[str]]:
+    def _live_result(
+        self, prompt: str
+    ) -> tuple[DailyDynamicNarrativeDraft, str | None, set[str], list[dict[str, Any]]]:
         if not self.settings.openai_api_key and self._client is None:
             raise RuntimeError("Dynamic live research requires OPENAI_API_KEY.")
         client = self._client or OpenAI(api_key=self.settings.openai_api_key).responses
@@ -118,6 +131,7 @@ class DynamicNarrativeResearcher:
             response.output_parsed,
             getattr(response, "id", None),
             _web_source_urls(response),
+            _web_retrieval_manifest(response),
         )
 
 
@@ -167,14 +181,10 @@ def _validate_result(
             cited = canonical_source_url(source.url)
             if retrieved_urls is not None and cited not in retrieved_urls:
                 continue
-            root_url = source.root_url
-            if (
-                root_url
-                and retrieved_urls is not None
-                and canonical_source_url(root_url) not in retrieved_urls
-            ):
-                root_url = ""
-            sources.append(source.model_copy(update={"root_url": root_url}))
+            # Syndication/root grouping is deterministic by source domain later;
+            # model-supplied root metadata never establishes independence.
+            source = source.model_copy(update={"root_url": ""})
+            sources.append(source.model_copy(update={"is_primary": is_primary_source(source)}))
         candidates.append(
             item.model_copy(
                 update={
@@ -217,3 +227,27 @@ def _web_source_urls(response: Any) -> set[str]:
             if isinstance(url, str) and url.startswith(("https://", "http://")):
                 urls.add(canonical_source_url(url))
     return urls
+
+
+def _web_retrieval_manifest(response: Any) -> list[dict[str, Any]]:
+    manifest = []
+    for index, item in enumerate(getattr(response, "output", []) or []):
+        if getattr(item, "type", "") != "web_search_call":
+            continue
+        action = getattr(item, "action", None)
+        if hasattr(action, "model_dump"):
+            action_data = action.model_dump(mode="json")
+        else:
+            action_data = {
+                "type": getattr(action, "type", None),
+                "query": getattr(action, "query", None),
+                "sources": [
+                    {
+                        "url": getattr(source, "url", None),
+                        "title": getattr(source, "title", None),
+                    }
+                    for source in getattr(action, "sources", []) or []
+                ],
+            }
+        manifest.append({"call_index": index, "action": action_data})
+    return manifest

@@ -84,6 +84,33 @@ def test_evidence_quality_counts_root_sources_not_syndicated_urls() -> None:
     assert metrics["attention_authenticity"] < metrics["evidence_quality"]
 
 
+def test_same_domain_pages_cannot_fake_independent_publishers() -> None:
+    sources = [
+        EvidenceSource(
+            title="First page",
+            url="https://desk.example/one",
+            publisher="Outlet A",
+            claim="A protocol filed for an IPO.",
+            source_type="original_reporting",
+            credibility=0.8,
+        ),
+        EvidenceSource(
+            title="Second page",
+            url="https://desk.example/two",
+            publisher="Outlet B",
+            claim="The same protocol filed for an IPO.",
+            source_type="original_reporting",
+            credibility=0.8,
+        ),
+    ]
+
+    metrics = evidence_metrics(sources)
+
+    assert metrics["unique_roots"] == 1
+    assert metrics["unique_publishers"] == 1
+    assert metrics["verified"] == 0
+
+
 def test_context_is_bounded_and_excludes_raw_payloads(tmp_path: Path) -> None:
     bundle = collect_market_data(Settings.from_env(tmp_path), RunMode.OFFLINE)
     context = build_research_context(bundle, asset_limit=3, category_limit=2, protocol_limit=2)
@@ -136,7 +163,7 @@ def test_stale_project_market_data_is_excluded_from_ranking() -> None:
 
     assert solana.metrics.market_data_age_hours > 48
     assert solana.metrics.price_7d_pct is None
-    assert not solana.eligible
+    assert not solana.research_eligible
 
 
 def test_offline_research_is_explicit_about_missing_live_evidence() -> None:
@@ -187,13 +214,16 @@ def test_live_research_is_stateless_structured_and_web_enabled(tmp_path: Path, m
                 why_it_matters="Tests stable mapping.",
                 direction="mixed",
                 horizon="7d",
+                event_subject="Test event",
+                event_type="market_event",
+                event_at=bundle.observed_at,
                 narrative_ids=[valid_id, "invented_narrative"],
                 sources=[
                     EvidenceSource(
                         title="First report",
                         url="https://one.example/report",
                         publisher="One",
-                        claim="The event occurred.",
+                        claim="The test market event occurred.",
                         published_at=bundle.observed_at,
                         credibility=0.7,
                     ),
@@ -201,7 +231,7 @@ def test_live_research_is_stateless_structured_and_web_enabled(tmp_path: Path, m
                         title="Second report",
                         url="https://two.example/report",
                         publisher="Two",
-                        claim="The event occurred.",
+                        claim="The test market event occurred.",
                         published_at=bundle.observed_at,
                         credibility=0.7,
                     ),

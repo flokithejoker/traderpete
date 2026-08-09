@@ -8,7 +8,8 @@ from difflib import SequenceMatcher
 from statistics import median
 from typing import Any
 
-from trader_pete.analysis.scoring import canonical_source_url, source_domain
+from trader_pete.analysis.economic import economic_underlying_key
+from trader_pete.analysis.scoring import source_domain, source_origin
 from trader_pete.models import (
     DailyDynamicNarrativeDraft,
     DynamicNarrativeMetrics,
@@ -55,12 +56,55 @@ def _supporting_roots(sources, as_of: datetime) -> tuple[set[str], set[str]]:
         age_days = (as_of - source.published_at).total_seconds() / 86_400
         if age_days < -42 or age_days > 90:
             continue
-        root = canonical_source_url(source.root_url or source.url)
+        root = source_origin(source.root_url or source.url)
         if source.supports:
             supporting.add(root)
         else:
             contradicting.add(root)
     return supporting, contradicting
+
+
+def _verified_event_count(candidate, as_of: datetime) -> int:
+    """A narrative draft carries at most one explicit event; articles never become events."""
+    if (
+        not candidate.event_subject.strip()
+        or not candidate.event_type.strip()
+        or not candidate.event_at
+    ):
+        return 0
+    age_days = (candidate.event_at - as_of).total_seconds() / 86_400
+    if age_days < -3 or age_days > 42:
+        return 0
+    subject_tokens = {
+        token
+        for token in re.findall(r"[a-z0-9]+", _normalize(candidate.event_subject))
+        if len(token) >= 3
+    }
+    if not subject_tokens:
+        return 0
+    event_type_tokens = {
+        token
+        for token in re.findall(r"[a-z0-9]+", _normalize(candidate.event_type))
+        if len(token) >= 3
+    }
+    if not event_type_tokens or not (subject_tokens - event_type_tokens):
+        return 0
+    roots = set()
+    for source in candidate.sources:
+        if not source.supports or not source.claim or source.published_at is None:
+            continue
+        published_age = (as_of - source.published_at).total_seconds() / 86_400
+        if published_age < -1 or published_age > 90:
+            continue
+        claim_tokens = set(re.findall(r"[a-z0-9]+", _normalize(source.claim)))
+        subject_overlap = len(subject_tokens & claim_tokens)
+        type_overlap = len(event_type_tokens & claim_tokens)
+        if subject_overlap < min(2, len(subject_tokens)) or (
+            event_type_tokens and type_overlap < 1
+        ):
+            continue
+        roots.add(source_origin(source.root_url or source.url))
+    return 1 if len(roots) >= 2 else 0
 
 
 def _identity_match(
@@ -216,7 +260,7 @@ def build_dynamic_radar(
             ),
             reverse=True,
         )
-        measured = [
+        measured_tokens = [
             assets[value]
             for value in valid_constituents
             if assets[value].change_7d_pct is not None
@@ -225,6 +269,17 @@ def build_dynamic_radar(
             and assets[value].volume_24h_usd
             and assets[value].volume_24h_usd >= 250_000
         ]
+        measured_by_underlying = {}
+        for asset in measured_tokens:
+            underlying = economic_underlying_key(
+                asset_id=asset.asset_id, name=asset.name, symbol=asset.symbol
+            )
+            previous_asset = measured_by_underlying.get(underlying)
+            if previous_asset is None or float(asset.volume_24h_usd or 0) > float(
+                previous_asset.volume_24h_usd or 0
+            ):
+                measured_by_underlying[underlying] = asset
+        measured = list(measured_by_underlying.values())
         returns_7d = [float(item.change_7d_pct) for item in measured]
         returns_30d = [float(item.change_30d_pct) for item in measured if item.change_30d_pct]
         median_7d = _median(returns_7d)
@@ -243,16 +298,28 @@ def build_dynamic_radar(
             else 0.0
         )
         fundamental, protocol_metric_count = _economic_confirmation(candidate, bundle)
-        trending_members = [value for value in valid_constituents if value in trending]
+        trending_by_underlying = {}
+        for value in valid_constituents:
+            if value not in trending:
+                continue
+            asset = assets[value]
+            underlying = economic_underlying_key(
+                asset_id=asset.asset_id, name=asset.name, symbol=asset.symbol
+            )
+            trending_by_underlying[underlying] = min(
+                trending[value], trending_by_underlying.get(underlying, trending[value])
+            )
+        trending_members = list(trending_by_underlying)
         search_attention = (
             _clamp(
-                70 * len(trending_members) / max(len(valid_constituents), 1)
-                + sum(max(0, 10 - trending[value]) for value in trending_members)
+                70 * len(trending_members) / max(len(set(measured_by_underlying)), 1)
+                + sum(max(0, 10 - rank) for rank in trending_by_underlying.values())
             )
             if trending_members
             else 0.0
         )
         roots, contradictions = _supporting_roots(candidate.sources, draft.as_of)
+        independent_events = _verified_event_count(candidate, draft.as_of)
         publishers = {
             source.publisher.strip().lower() or source_domain(source.url)
             for source in candidate.sources
@@ -270,7 +337,7 @@ def build_dynamic_radar(
             lanes.append("fundamental")
         if len(trending_members) >= 2:
             lanes.append("search")
-        if roots:
+        if independent_events >= 1 and len(roots) >= 2:
             lanes.append("event")
 
         prior_rows = history_by_id.get(narrative_id, [])
@@ -310,7 +377,7 @@ def build_dynamic_radar(
         confidence = _clamp(
             len(measured) * 12
             + len(lanes) * 12
-            + len(roots) * 12
+            + min(len(roots), 2) * 12
             + min(protocol_metric_count, 3) * 7
         )
         if not roots:
@@ -318,7 +385,12 @@ def build_dynamic_radar(
 
         rejection_reasons: list[str] = []
         if len(measured) < 3:
-            rejection_reasons.append("Fewer than three measured liquid-proxy constituents")
+            rejection_reasons.append("Fewer than three independent measured economic underlyings")
+        if len(measured_tokens) > len(measured):
+            rejection_reasons.append(
+                f"{len(measured_tokens)} liquid tokens collapse to "
+                f"{len(measured)} independent economic underlyings"
+            )
         if len(lanes) < 2:
             rejection_reasons.append("Fewer than two independent discovery lanes")
         if not roots:
@@ -411,9 +483,11 @@ def build_dynamic_radar(
                     evidence_quality=evidence_quality,
                     overheat_risk=overheat,
                     measured_asset_count=len(measured),
+                    measured_underlying_count=len(measured),
                     protocol_metric_count=protocol_metric_count,
                     trending_asset_count=len(trending_members),
                     unique_evidence_roots=len(roots),
+                    independent_event_count=independent_events,
                     lane_count=len(lanes),
                 ),
                 sources=candidate.sources,

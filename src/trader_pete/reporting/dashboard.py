@@ -27,6 +27,7 @@ def _prepare(data: dict[str, Any]) -> dict[str, Any]:
     }
     projects_by_narrative: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for item in data["projects"]:
+        item["research_eligible"] = bool(item.pop("eligible"))
         item["metrics"] = json.loads(item.pop("metrics_json"))
         item["selection_notes"] = json.loads(item.pop("selection_notes_json"))
         review_json = item.pop("review_json")
@@ -41,7 +42,9 @@ def _prepare(data: dict[str, Any]) -> dict[str, Any]:
         update_json = item.pop("update_json")
         item["update"] = json.loads(update_json) if update_json else None
         item["projects"] = projects_by_narrative[item["narrative_id"]]
-        item["top_projects"] = [project for project in item["projects"] if project["eligible"]][:3]
+        item["top_projects"] = [
+            project for project in item["projects"] if project["research_eligible"]
+        ][:3]
         prior = previous_narratives.get(item["narrative_id"])
         item["score_delta"] = round(item["score"] - prior["score"], 1) if prior else None
         item["previous_state"] = prior["state"] if prior else None
@@ -88,6 +91,28 @@ def _prepare(data: dict[str, Any]) -> dict[str, Any]:
         item["state"] in {"emerging", "accelerating"} for item in data["dynamic_narratives"]
     )
 
+    for item in data["paper_candidates"]:
+        assessment = json.loads(item.pop("assessment_json"))
+        item.update(assessment)
+        item["gate_map"] = {gate["name"]: gate for gate in item["gates"]}
+        item["blockers"] = [gate for gate in item["gates"] if gate["status"] != "pass"]
+        research_gates = [
+            item["gate_map"][name]
+            for name in ("narrative_state", "narrative_evidence", "project_diligence")
+        ]
+        item["research_status"] = (
+            "fail"
+            if any(gate["status"] == "fail" for gate in research_gates)
+            else "unknown"
+            if any(gate["status"] == "unknown" for gate in research_gates)
+            else "pass"
+        )
+    for item in data["paper_proposals"]:
+        item["packet"] = json.loads(item.pop("proposal_json"))
+    data["paper_proposable_count"] = sum(
+        item["state"] == "proposable" for item in data["paper_candidates"]
+    )
+
     assets = {item["asset_id"]: item for item in data["assets"]}
     bitcoin = assets.get("bitcoin") or {}
     liquid_assets = [
@@ -102,7 +127,10 @@ def _prepare(data: dict[str, Any]) -> dict[str, Any]:
         if liquid_assets
         else 0
     )
-    observed_at = data["run"]["started_at"]
+    is_live = data["run"]["mode"] == "live"
+    provider_fetch = data.get("provider_fetch") or {}
+    observed_at = provider_fetch.get("latest_response_at") if is_live else None
+    observed_at = observed_at or data["run"]["as_of"]
     observed_datetime = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
     age_hours = max(0, (datetime.now(UTC) - observed_datetime).total_seconds() / 3600)
     total_projects = sum(item["metrics"]["project_count"] for item in data["narratives"])
@@ -113,9 +141,11 @@ def _prepare(data: dict[str, Any]) -> dict[str, Any]:
     data["focus_narratives"] = [item for item in data["narratives"] if item["is_focus"]]
     focus_ids = {item["narrative_id"] for item in data["focus_narratives"]}
     focus_projects = [
-        item for item in data["projects"] if item["narrative_id"] in focus_ids and item["eligible"]
+        item
+        for item in data["projects"]
+        if item["narrative_id"] in focus_ids and item["research_eligible"]
     ]
-    fallback_projects = [item for item in data["projects"] if item["eligible"]]
+    fallback_projects = [item for item in data["projects"] if item["research_eligible"]]
     data["project_candidates"] = sorted(
         focus_projects or fallback_projects,
         key=lambda item: item["score"],
@@ -129,6 +159,8 @@ def _prepare(data: dict[str, Any]) -> dict[str, Any]:
         round(measured_projects / total_projects * 100, 1) if total_projects else 0
     )
     data["observed_at"] = observed_at
+    data["is_live"] = is_live
+    data["has_provider_fetch"] = bool(is_live and provider_fetch.get("received_payloads"))
     data["age_hours"] = round(age_hours, 1)
     data["is_stale"] = age_hours > 36
     data["data_gaps"] = json.loads(data["research"]["data_gaps_json"])

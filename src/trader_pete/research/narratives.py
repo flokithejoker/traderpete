@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from openai import OpenAI
 
-from trader_pete.analysis.scoring import canonical_source_url, evidence_metrics
+from trader_pete.analysis.scoring import (
+    canonical_source_url,
+    evidence_metrics,
+    is_primary_source,
+    source_origin,
+)
 from trader_pete.config import Settings
 from trader_pete.models import (
     DailyLandscapeResearch,
@@ -22,7 +28,8 @@ from trader_pete.models import (
     SocialWindowMetrics,
 )
 
-PROMPT_VERSION = "landscape-and-quality-v5"
+PROMPT_VERSION = "landscape-and-quality-v7"
+QUALITY_REASONING_EFFORT = "low"
 
 SYSTEM_INSTRUCTIONS = """You are Trader Pete's bounded crypto market researcher.
 The stable taxonomy, dynamic narrative radar, and deterministic rankings in the input are
@@ -30,25 +37,34 @@ authoritative. You may explain or challenge them, but you must never create, ren
 score a narrative. Use only supplied narrative IDs and project IDs. Do not produce price targets,
 purchases, allocations, or trade recommendations.
 
-Research at most five genuinely market-relevant root events from the last 72 hours or dated
+Research at most two genuinely market-relevant root events from the last 72 hours or dated
 catalysts inside the next 28 days. Map every event to the supplied stable narratives. Prefer
 protocol or company announcements, filings, governance records, repositories, regulators,
 onchain data, and reputable original reporting. Trace syndicated coverage to its root, keep
 at most three independent roots per claim, and include contradictions. An aggregator or social
 post can discover a lead but cannot verify one. Do not treat CoinGecko trending as sentiment.
+Every event must include a normalized event subject, type, and timestamp. Multiple articles about
+one subject/type/timestamp are independent evidence roots for one event, not separate events.
 
 For each stable focus narrative, state why the measured evidence matters now and the strongest
-counterpoint. For project diligence, prioritize the two highest-ranked dynamic narratives with at
-least three resolved projects, then the stable focus set. Review no more than two supplied projects
-per stable focus or dynamic narrative.
+counterpoint. Review exactly one project: the highest-ranked project from the strongest eligible
+dynamic narrative, falling back to the strongest stable focus when no dynamic project is available.
 A project review must separately cover identifiable team, independently confirmed backing,
 shipped product, measured adoption/economics, engineering delivery, security/governance,
 community evidence, token value capture, dated catalyst, and risks. Every non-unknown quality
-dimension must cite URLs included in that review's source list. Mark evidence unavailable when it
+dimension must cite URLs included in that review's source list. Separately verify circulating and
+total supply plus any material unlocks or emissions inside the next 35 days. Return the unlock
+amount, percentage of current circulating supply, largest dated cliff, and exact schedule URL.
+Use 0% only when a retrieved official schedule establishes no unlock; do not infer a schedule
+from fully diluted valuation. Mark evidence unavailable when it
 cannot be verified. Do not call a project credible from branding, market capitalization, price
 performance, follower counts, or anonymous enthusiasm. Strong VC backing is not automatically
 bullish. Do not infer organic sentiment, individual bot status, or AI-authored news without an
 auditable raw dataset.
+
+Be terse: keep every narrative explanation, quality reason, project field, risk, and source claim
+under 25 words. Use at most three sources per project and two risks. The dashboard needs decisions,
+not essay prose.
 
 The supplied input context is not a source. Never cite an input:// URL or restate the input as
 external evidence; every returned source must be an HTTP(S) URL retrieved through web search.
@@ -72,6 +88,8 @@ class ResearchOutput:
     prompt: str
     prompt_version: str
     response_id: str | None
+    retrieved_urls: tuple[str, ...]
+    retrieval_manifest: tuple[dict[str, Any], ...]
 
 
 class LandscapeResearcher:
@@ -92,31 +110,37 @@ class LandscapeResearcher:
         if offline:
             result = _offline_result(landscape)
             response_id = None
+            retrieved_urls: set[str] = set()
+            retrieval_manifest: list[dict[str, Any]] = []
         else:
-            result, response_id, retrieved_urls = self._live_result(prompt)
+            result, response_id, retrieved_urls, retrieval_manifest = self._live_result(prompt)
             result = _validate_result(result, landscape, radar, retrieved_urls=retrieved_urls)
         return ResearchOutput(
             result=result,
             prompt=prompt,
             prompt_version=PROMPT_VERSION,
             response_id=response_id,
+            retrieved_urls=tuple(sorted(retrieved_urls)),
+            retrieval_manifest=tuple(retrieval_manifest),
         )
 
-    def _live_result(self, prompt: str) -> tuple[DailyLandscapeResearch, str | None, set[str]]:
+    def _live_result(
+        self, prompt: str
+    ) -> tuple[DailyLandscapeResearch, str | None, set[str], list[dict[str, Any]]]:
         if not self.settings.openai_api_key and self._client is None:
             raise ResearchConfigurationError("Live research requires OPENAI_API_KEY.")
         client = self._client or OpenAI(api_key=self.settings.openai_api_key).responses
         response = client.parse(
             model=self.settings.model,
-            reasoning={"effort": self.settings.reasoning_effort, "context": "current_turn"},
+            reasoning={"effort": QUALITY_REASONING_EFFORT, "context": "current_turn"},
             tools=[{"type": "web_search", "search_context_size": "medium"}],
             include=["web_search_call.action.sources"],
             input=prompt,
             instructions=SYSTEM_INSTRUCTIONS,
             text_format=DailyLandscapeResearch,
             store=False,
-            max_tool_calls=12,
-            max_output_tokens=12_000,
+            max_tool_calls=9,
+            max_output_tokens=24_000,
             text={"verbosity": "low"},
         )
         if response.output_parsed is None:
@@ -125,6 +149,7 @@ class LandscapeResearcher:
             response.output_parsed,
             getattr(response, "id", None),
             _web_source_urls(response),
+            _web_retrieval_manifest(response),
         )
 
 
@@ -159,7 +184,7 @@ def _prompt(
                 "asset_id": item.asset_id,
                 "rank": item.rank,
                 "score": item.score,
-                "eligible": item.eligible,
+                "research_eligible": item.research_eligible,
                 "measured_metrics": item.metrics.model_dump(mode="json"),
                 "selection_notes": item.selection_notes,
             }
@@ -263,7 +288,41 @@ def _validate_result(
         mapped = [value for value in dict.fromkeys(item.narrative_ids) if value in narrative_ids]
         sources = _dedupe_sources(item.sources, 3, retrieved_urls)
         evidence = evidence_metrics(sources, as_of=landscape.as_of)
-        if not mapped or not evidence["verified"]:
+        event_age = (
+            (item.event_at - landscape.as_of).total_seconds() / 86_400 if item.event_at else None
+        )
+        source_fresh = bool(sources) and all(
+            source.published_at is not None
+            and -1 <= (landscape.as_of - source.published_at).total_seconds() / 86_400 <= 3
+            for source in sources
+        )
+        subject_tokens = {
+            token
+            for token in re.findall(r"[a-z0-9]+", item.event_subject.lower())
+            if len(token) >= 4
+        }
+        type_tokens = {
+            token for token in re.findall(r"[a-z0-9]+", item.event_type.lower()) if len(token) >= 3
+        }
+        claims_linked = bool(subject_tokens) and all(
+            len(subject_tokens & set(re.findall(r"[a-z0-9]+", source.claim.lower())))
+            >= min(2, len(subject_tokens))
+            and (
+                not type_tokens or type_tokens & set(re.findall(r"[a-z0-9]+", source.claim.lower()))
+            )
+            for source in sources
+        )
+        event_window_ok = -3 <= event_age <= 28 if event_age is not None else source_fresh
+        if event_age is not None and event_age <= 0:
+            event_window_ok = event_window_ok and source_fresh
+        if (
+            not mapped
+            or not evidence["verified"]
+            or not item.event_subject.strip()
+            or not item.event_type.strip()
+            or not event_window_ok
+            or not claims_linked
+        ):
             continue
         events.append(item.model_copy(update={"narrative_ids": mapped, "sources": sources}))
     updates: list[NarrativeUpdate] = []
@@ -280,12 +339,14 @@ def _validate_result(
     seen_reviews: set[tuple[str, str]] = set()
     per_narrative: dict[str, int] = {}
     for item in result.project_reviews:
+        if len(reviews) >= 1:
+            break
         key = (item.narrative_id, item.project_id)
         if key not in allowed_projects or key in seen_reviews:
             continue
-        if per_narrative.get(item.narrative_id, 0) >= 2:
+        if per_narrative.get(item.narrative_id, 0) >= 1:
             continue
-        sources = _dedupe_sources(item.sources, 5, retrieved_urls)
+        sources = _dedupe_sources(item.sources, 3, retrieved_urls)
         verdict = item.verdict
         evidence = evidence_metrics(sources, as_of=landscape.as_of)
         quality = _validate_quality(item.quality, sources)
@@ -307,12 +368,21 @@ def _validate_result(
         gaps.append("Not every quantitative focus narrative received a verified research update.")
     if not events:
         gaps.append("No qualifying root event was verified for the morning brief.")
+    market_summary = (
+        " ".join(f"{event.title}: {event.why_it_matters}" for event in events)
+        if events
+        else (
+            "No qualifying root event survived retrieval and independence checks. Use the "
+            "quantitative boards below; no news catalyst is asserted by this run."
+        )
+    )
     return result.model_copy(
         update={
             "as_of": landscape.as_of,
             "key_events": events,
             "narrative_updates": updates,
             "project_reviews": reviews,
+            "market_summary": market_summary,
             "data_gaps": list(dict.fromkeys(gaps)),
         }
     )
@@ -344,6 +414,7 @@ def _validate_quality(
         "security_and_governance",
         "community_quality",
         "token_value_capture",
+        "token_supply_and_unlocks",
     ):
         dimension = getattr(quality, name)
         evidence_urls = [
@@ -359,11 +430,21 @@ def _validate_quality(
         updates[name] = validated
         if status is not EvidenceStatus.UNKNOWN:
             known_scores.append(status_points[status])
-    coverage = round(len(known_scores) / 8 * 100, 1)
+    coverage = round(len(known_scores) / 9 * 100, 1)
     updates["quality_coverage"] = coverage
     updates["seriousness_score"] = (
         round(sum(known_scores) / len(known_scores), 1) if len(known_scores) >= 4 else None
     )
+    unlock_url = quality.unlock_schedule_source_url
+    if not unlock_url or canonical_source_url(unlock_url) not in allowed_urls:
+        updates.update(
+            {
+                "next_35d_unlock_pct_of_circulating": None,
+                "next_35d_unlock_amount": None,
+                "largest_unlock_at": None,
+                "unlock_schedule_source_url": None,
+            }
+        )
     return quality.model_copy(update=updates)
 
 
@@ -373,15 +454,10 @@ def _dedupe_sources(sources, limit: int, retrieved_urls: set[str] | None = None)
         cited = canonical_source_url(source.url)
         if retrieved_urls is not None and cited not in retrieved_urls:
             continue
-        root_url = source.root_url
-        if (
-            root_url
-            and retrieved_urls is not None
-            and canonical_source_url(root_url) not in retrieved_urls
-        ):
-            root_url = ""
-        source = source.model_copy(update={"root_url": root_url})
-        root = canonical_source_url(source.root_url or source.url)
+        # Model-supplied syndication metadata is not an independence signal.
+        source = source.model_copy(update={"root_url": ""})
+        source = source.model_copy(update={"is_primary": is_primary_source(source)})
+        root = source_origin(source.url)
         selected.setdefault(root, source)
     return list(selected.values())[:limit]
 
@@ -397,6 +473,30 @@ def _web_source_urls(response: Any) -> set[str]:
             if isinstance(url, str) and url.startswith(("https://", "http://")):
                 urls.add(canonical_source_url(url))
     return urls
+
+
+def _web_retrieval_manifest(response: Any) -> list[dict[str, Any]]:
+    manifest = []
+    for index, item in enumerate(getattr(response, "output", []) or []):
+        if getattr(item, "type", "") != "web_search_call":
+            continue
+        action = getattr(item, "action", None)
+        if hasattr(action, "model_dump"):
+            action_data = action.model_dump(mode="json")
+        else:
+            action_data = {
+                "type": getattr(action, "type", None),
+                "query": getattr(action, "query", None),
+                "sources": [
+                    {
+                        "url": getattr(source, "url", None),
+                        "title": getattr(source, "title", None),
+                    }
+                    for source in getattr(action, "sources", []) or []
+                ],
+            }
+        manifest.append({"call_index": index, "action": action_data})
+    return manifest
 
 
 NarrativeResearcher = LandscapeResearcher

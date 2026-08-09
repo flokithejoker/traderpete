@@ -1,7 +1,8 @@
 {
-  "version": "paper-v1",
+  "version": "paper-v2",
   "mode": "paper_only",
   "minimum_prospective_days": 30,
+  "paper_initial_cash_usd": 300,
   "maximum_open_positions": 2,
   "maximum_deployed_nav_pct": 60,
   "maximum_position_nav_pct": 30,
@@ -10,10 +11,31 @@
   "spot_only": true,
   "human_confirmation_required": true,
   "automatic_order_execution": false,
+  "approval_ttl_hours": 12,
+  "maximum_quote_age_seconds": 120,
+  "maximum_approval_price_move_pct": 3,
+  "paper_horizon_days": 28,
+  "maximum_round_trip_cost_pct": 1.5,
+  "maximum_spread_pct": 0.75,
+  "maximum_one_way_impact_pct": 0.75,
+  "maximum_depth_utilization_pct": 5,
+  "minimum_depth_multiple": 20,
+  "minimum_quality_coverage_pct": 55,
+  "minimum_seriousness_score": 60,
+  "minimum_project_market_age_days": 7,
+  "minimum_float_pct": 35,
+  "maximum_fdv_to_market_cap": 4,
+  "maximum_next_35d_unlock_pct_of_circulating": 5,
+  "minimum_rsi_14": 45,
+  "maximum_rsi_14": 72,
+  "maximum_atr_14_pct": 15,
+  "maximum_price_above_ma20_pct": 20,
+  "maximum_candidates_per_run": 4,
   "dynamic_entry_states": ["emerging", "accelerating"],
   "notes": [
-    "This policy is frozen for prospective evaluation and is not yet an entry engine.",
+    "All thresholds are frozen policy hypotheses, not demonstrated alpha.",
     "Every dynamic observation receives immutable 7-day and 28-day outcome tracking.",
-    "No historical web reconstruction is used to claim past narrative performance."
+    "No historical web reconstruction is used to claim past narrative performance.",
+    "Unknown official contract binding, security, quantified unlock, value-capture, or executable-liquidity evidence blocks a paper proposal."
   ]
 }

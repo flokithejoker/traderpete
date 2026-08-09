@@ -96,7 +96,7 @@ def analyze_landscape(
                 btc_30d=btc_30d,
                 is_trending=project.asset_id in trending,
             )
-            score, eligible, notes = _project_score(metrics)
+            score, research_eligible, notes = _project_score(metrics)
             project_rows.append(
                 ProjectSnapshot(
                     narrative_id=definition.id,
@@ -105,13 +105,13 @@ def analyze_landscape(
                     asset_id=project.asset_id,
                     rank=1,
                     score=score,
-                    eligible=eligible,
+                    research_eligible=research_eligible,
                     metrics=metrics,
                     selection_notes=notes,
                 )
             )
 
-        project_rows.sort(key=lambda item: (item.eligible, item.score), reverse=True)
+        project_rows.sort(key=lambda item: (item.research_eligible, item.score), reverse=True)
         project_rows = [
             item.model_copy(update={"rank": rank}) for rank, item in enumerate(project_rows, 1)
         ]
@@ -359,7 +359,7 @@ def _project_score(metrics: ProjectMetrics) -> tuple[float, bool, list[str]]:
 
 def _narrative_metrics(*, definition, projects, categories, btc_7d: float) -> NarrativeMetrics:
     measured = [item for item in projects if item.metrics.price_7d_pct is not None]
-    eligible = [item for item in projects if item.eligible]
+    eligible = [item for item in projects if item.research_eligible]
     prices_7d = [item.metrics.price_7d_pct for item in measured]
     prices_30d = [
         item.metrics.price_30d_pct for item in measured if item.metrics.price_30d_pct is not None
@@ -402,7 +402,7 @@ def _narrative_metrics(*, definition, projects, categories, btc_7d: float) -> Na
 
 
 def _narrative_score(projects: list[ProjectSnapshot], metrics: NarrativeMetrics) -> float:
-    eligible_scores = [item.score for item in projects if item.eligible]
+    eligible_scores = [item.score for item in projects if item.research_eligible]
     project_signal = _median(sorted(eligible_scores, reverse=True)[:3])
     breadth = metrics.breadth_vs_btc_pct
     components = [

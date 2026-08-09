@@ -6,7 +6,7 @@ import sqlite3
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from statistics import median
 from typing import Any
@@ -14,11 +14,14 @@ from typing import Any
 from trader_pete.config import StrategyPolicy
 from trader_pete.models import (
     CategoryMarket,
+    DailyDynamicNarrativeDraft,
     DailyLandscapeResearch,
     DailyNarrativeResearch,
     DynamicRadarSnapshot,
+    InvestabilityDataBundle,
     LandscapeSnapshot,
     MarketAsset,
+    PaperEvaluation,
     ProtocolActivityMetric,
     ProtocolMetric,
     RunMode,
@@ -26,6 +29,8 @@ from trader_pete.models import (
     SocialWindowMetrics,
     TrendingAsset,
 )
+
+CANONICAL_LEASE_TTL = timedelta(hours=2)
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -39,7 +44,8 @@ CREATE TABLE IF NOT EXISTS runs (
     completed_at TEXT,
     config_json TEXT NOT NULL,
     config_hash TEXT NOT NULL,
-    error TEXT
+    error TEXT,
+    workflow_complete INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS provider_payloads (
@@ -51,6 +57,11 @@ CREATE TABLE IF NOT EXISTS provider_payloads (
     observed_at TEXT NOT NULL,
     payload_json TEXT NOT NULL,
     payload_hash TEXT NOT NULL,
+    request_params_hash TEXT,
+    response_received_at TEXT,
+    http_status INTEGER,
+    content_type TEXT,
+    request_manifest_json TEXT NOT NULL DEFAULT '[]',
     UNIQUE (run_id, provider, endpoint)
 );
 
@@ -178,6 +189,10 @@ CREATE TABLE IF NOT EXISTS research_runs (
     market_regime TEXT NOT NULL,
     market_summary TEXT NOT NULL DEFAULT '',
     data_gaps_json TEXT NOT NULL
+    ,prompt_text TEXT NOT NULL DEFAULT ''
+    ,normalized_output_json TEXT NOT NULL DEFAULT '{}'
+    ,source_manifest_json TEXT NOT NULL DEFAULT '[]'
+    ,packet_hash TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS landscape_narratives (
@@ -220,6 +235,9 @@ CREATE TABLE IF NOT EXISTS market_events (
     why_it_matters TEXT NOT NULL,
     direction TEXT NOT NULL,
     horizon TEXT NOT NULL,
+    event_subject TEXT NOT NULL DEFAULT '',
+    event_type TEXT NOT NULL DEFAULT '',
+    event_at TEXT,
     narrative_ids_json TEXT NOT NULL,
     sources_json TEXT NOT NULL,
     PRIMARY KEY (run_id, event_index)
@@ -232,7 +250,12 @@ CREATE TABLE IF NOT EXISTS dynamic_research_runs (
     prompt_version TEXT NOT NULL,
     prompt_hash TEXT NOT NULL,
     response_id TEXT,
-    data_gaps_json TEXT NOT NULL
+    data_gaps_json TEXT NOT NULL,
+    prompt_text TEXT NOT NULL DEFAULT '',
+    normalized_output_json TEXT NOT NULL DEFAULT '{}',
+    source_manifest_json TEXT NOT NULL DEFAULT '[]',
+    validated_draft_json TEXT NOT NULL DEFAULT '{}',
+    packet_hash TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS dynamic_narratives (
@@ -327,6 +350,133 @@ CREATE TABLE IF NOT EXISTS paper_decisions (
     policy_hash TEXT NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS canonical_runs (
+    policy_hash TEXT NOT NULL,
+    run_mode TEXT NOT NULL,
+    decision_date TEXT NOT NULL,
+    run_id TEXT NOT NULL UNIQUE REFERENCES runs(id),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (policy_hash, run_mode, decision_date)
+);
+
+CREATE TABLE IF NOT EXISTS strategy_policy_versions (
+    policy_hash TEXT PRIMARY KEY,
+    version TEXT NOT NULL,
+    policy_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS paper_portfolios (
+    id TEXT PRIMARY KEY,
+    policy_hash TEXT NOT NULL REFERENCES strategy_policy_versions(policy_hash),
+    initial_cash_usd REAL NOT NULL,
+    created_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    UNIQUE (policy_hash)
+);
+
+CREATE TABLE IF NOT EXISTS portfolio_cash_ledger (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    portfolio_id TEXT NOT NULL REFERENCES paper_portfolios(id),
+    event_type TEXT NOT NULL,
+    amount_usd REAL NOT NULL,
+    reference_type TEXT NOT NULL,
+    reference_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (portfolio_id, reference_type, reference_id, event_type)
+);
+
+CREATE TABLE IF NOT EXISTS venue_quote_snapshots (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES runs(id),
+    asset_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    venue TEXT NOT NULL,
+    pair TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    quote_json TEXT NOT NULL,
+    quote_hash TEXT NOT NULL,
+    UNIQUE (run_id, provider, asset_id, pair)
+);
+
+CREATE TABLE IF NOT EXISTS paper_candidate_assessments (
+    run_id TEXT NOT NULL REFERENCES runs(id),
+    narrative_id TEXT NOT NULL,
+    asset_id TEXT NOT NULL,
+    state TEXT NOT NULL,
+    research_priority REAL NOT NULL,
+    assessment_json TEXT NOT NULL,
+    assessment_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (run_id, narrative_id, asset_id)
+);
+
+CREATE TABLE IF NOT EXISTS trade_proposals (
+    id TEXT PRIMARY KEY,
+    portfolio_id TEXT NOT NULL REFERENCES paper_portfolios(id),
+    source_run_id TEXT NOT NULL REFERENCES runs(id),
+    narrative_id TEXT NOT NULL,
+    asset_id TEXT NOT NULL,
+    intent TEXT NOT NULL CHECK (intent IN ('entry', 'exit')),
+    venue_quote_id TEXT NOT NULL REFERENCES venue_quote_snapshots(id),
+    venue TEXT NOT NULL,
+    pair TEXT NOT NULL,
+    chain_id TEXT,
+    contract_address TEXT,
+    proposed_notional_usd REAL NOT NULL,
+    proposed_quantity REAL NOT NULL,
+    decision_price REAL NOT NULL,
+    maximum_entry_price REAL,
+    stop_price REAL,
+    maximum_initial_loss_usd REAL,
+    policy_hash TEXT NOT NULL,
+    proposal_json TEXT NOT NULL,
+    proposal_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    approval_deadline TEXT NOT NULL,
+    planned_exit_at TEXT NOT NULL,
+    UNIQUE (source_run_id, asset_id, intent)
+);
+
+CREATE TABLE IF NOT EXISTS proposal_events (
+    proposal_id TEXT NOT NULL REFERENCES trade_proposals(id),
+    sequence INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    proposal_hash TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    quote_id TEXT REFERENCES venue_quote_snapshots(id),
+    PRIMARY KEY (proposal_id, sequence)
+);
+
+CREATE TABLE IF NOT EXISTS paper_fills (
+    id TEXT PRIMARY KEY,
+    proposal_id TEXT NOT NULL UNIQUE REFERENCES trade_proposals(id),
+    fill_run_id TEXT NOT NULL REFERENCES runs(id),
+    quote_id TEXT NOT NULL REFERENCES venue_quote_snapshots(id),
+    side TEXT NOT NULL CHECK (side IN ('buy', 'sell')),
+    quantity REAL NOT NULL,
+    execution_price REAL NOT NULL,
+    gross_notional_usd REAL NOT NULL,
+    fee_usd REAL NOT NULL,
+    total_cost_bps REAL NOT NULL,
+    executed_at TEXT NOT NULL,
+    fill_model_version TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS paper_positions (
+    id TEXT PRIMARY KEY,
+    portfolio_id TEXT NOT NULL REFERENCES paper_portfolios(id),
+    opening_fill_id TEXT NOT NULL UNIQUE REFERENCES paper_fills(id),
+    narrative_id TEXT NOT NULL,
+    asset_id TEXT NOT NULL,
+    quantity REAL NOT NULL,
+    opened_at TEXT NOT NULL,
+    planned_exit_at TEXT NOT NULL,
+    initial_stop_price REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS dashboard_artifacts (
     run_id TEXT PRIMARY KEY REFERENCES runs(id),
     path TEXT NOT NULL,
@@ -371,6 +521,8 @@ class Database:
 
     @staticmethod
     def _migrate(connection: sqlite3.Connection) -> None:
+        user_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+        run_columns_before = {row["name"] for row in connection.execute("PRAGMA table_info(runs)")}
         additions = {
             "category_snapshots": {
                 "top_asset_ids_json": "TEXT NOT NULL DEFAULT '[]'",
@@ -388,6 +540,29 @@ class Database:
             },
             "research_runs": {
                 "market_summary": "TEXT NOT NULL DEFAULT ''",
+                "prompt_text": "TEXT NOT NULL DEFAULT ''",
+                "normalized_output_json": "TEXT NOT NULL DEFAULT '{}'",
+                "source_manifest_json": "TEXT NOT NULL DEFAULT '[]'",
+                "packet_hash": "TEXT NOT NULL DEFAULT ''",
+            },
+            "dynamic_research_runs": {
+                "prompt_text": "TEXT NOT NULL DEFAULT ''",
+                "normalized_output_json": "TEXT NOT NULL DEFAULT '{}'",
+                "source_manifest_json": "TEXT NOT NULL DEFAULT '[]'",
+                "validated_draft_json": "TEXT NOT NULL DEFAULT '{}'",
+                "packet_hash": "TEXT NOT NULL DEFAULT ''",
+            },
+            "provider_payloads": {
+                "request_params_hash": "TEXT",
+                "response_received_at": "TEXT",
+                "http_status": "INTEGER",
+                "content_type": "TEXT",
+                "request_manifest_json": "TEXT NOT NULL DEFAULT '[]'",
+            },
+            "market_events": {
+                "event_subject": "TEXT NOT NULL DEFAULT ''",
+                "event_type": "TEXT NOT NULL DEFAULT ''",
+                "event_at": "TEXT",
             },
             "forecast_cohorts": {
                 "decision_date": "TEXT NOT NULL DEFAULT ''",
@@ -407,21 +582,72 @@ class Database:
                 "readiness_state": ("TEXT NOT NULL DEFAULT 'BLOCKED_INSUFFICIENT_HISTORY'"),
                 "policy_hash": "TEXT NOT NULL DEFAULT ''",
             },
+            "runs": {
+                "workflow_complete": "INTEGER NOT NULL DEFAULT 0",
+            },
         }
         for table, columns in additions.items():
             existing = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})")}
             for column, definition in columns.items():
                 if column not in existing:
                     connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        connection.execute("DROP INDEX IF EXISTS uq_canonical_forecast_cohort")
         connection.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS uq_canonical_forecast_cohort
             ON forecast_cohorts (
-                strategy_version, run_mode, decision_date, narrative_id
+                policy_hash, run_mode, decision_date, narrative_id
             ) WHERE is_canonical = 1
             """
         )
-        connection.execute("PRAGMA user_version = 5")
+        if "workflow_complete" not in run_columns_before:
+            connection.execute(
+                """
+                UPDATE runs SET workflow_complete = 1
+                WHERE status = 'succeeded' AND (
+                    (
+                        EXISTS (SELECT 1 FROM paper_decisions d WHERE d.run_id = runs.id)
+                        AND EXISTS (SELECT 1 FROM dashboard_artifacts a WHERE a.run_id = runs.id)
+                    )
+                    OR config_json LIKE '%paper_quote_refresh%'
+                )
+                """
+            )
+        if user_version < 9:
+            connection.execute(
+                """
+                UPDATE runs SET workflow_complete = CASE
+                    WHEN status = 'succeeded' AND (
+                        EXISTS (SELECT 1 FROM paper_decisions d WHERE d.run_id = runs.id)
+                        OR config_json LIKE '%paper_quote_refresh%'
+                    ) THEN 1 ELSE 0 END
+                """
+            )
+        if user_version < 10:
+            connection.execute(
+                """
+                UPDATE market_events
+                SET event_subject = COALESCE((
+                        SELECT json_extract(
+                            r.normalized_output_json,
+                            '$.key_events[' || (market_events.event_index - 1) || '].event_subject'
+                        ) FROM research_runs r WHERE r.run_id = market_events.run_id
+                    ), ''),
+                    event_type = COALESCE((
+                        SELECT json_extract(
+                            r.normalized_output_json,
+                            '$.key_events[' || (market_events.event_index - 1) || '].event_type'
+                        ) FROM research_runs r WHERE r.run_id = market_events.run_id
+                    ), ''),
+                    event_at = (
+                        SELECT json_extract(
+                            r.normalized_output_json,
+                            '$.key_events[' || (market_events.event_index - 1) || '].event_at'
+                        ) FROM research_runs r WHERE r.run_id = market_events.run_id
+                    )
+                """
+            )
+        connection.execute("PRAGMA user_version = 10")
 
     def create_run(self, *, as_of: datetime, mode: RunMode, config: dict[str, object]) -> str:
         run_id = f"{as_of.strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
@@ -447,11 +673,102 @@ class Database:
 
     def finish_run(self, run_id: str, status: RunStatus, error: str | None = None) -> None:
         with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE runs SET status = ?, completed_at = ?, error = ?, workflow_complete = ?
+                WHERE id = ? AND status = 'running'
+                """,
+                (
+                    status.value,
+                    datetime.now(UTC).isoformat(),
+                    error,
+                    int(status is RunStatus.SUCCEEDED),
+                    run_id,
+                ),
+            )
+            if cursor.rowcount == 0:
+                current = connection.execute(
+                    "SELECT status FROM runs WHERE id = ?", (run_id,)
+                ).fetchone()
+                if current is None:
+                    raise KeyError(f"Unknown run: {run_id}")
+                if current["status"] != status.value:
+                    raise ValueError(
+                        f"Run {run_id} is terminal ({current['status']}); it cannot become "
+                        f"{status.value}."
+                    )
+            if status is RunStatus.FAILED:
+                self._invalidate_incomplete_run(connection, run_id, error or "Run failed.")
+
+    def complete_daily_run(self, run_id: str) -> None:
+        """Atomically terminalize a daily run only after its decision ledger exists."""
+        with self.connect() as connection:
+            run = connection.execute("SELECT status FROM runs WHERE id = ?", (run_id,)).fetchone()
+            decision = connection.execute(
+                "SELECT 1 FROM paper_decisions WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if run is None or run["status"] != RunStatus.RUNNING.value:
+                raise ValueError("Daily completion requires a running run.")
+            if decision is None:
+                raise ValueError("Daily completion requires a persisted paper decision.")
+            cohort = connection.execute(
+                "SELECT policy_hash, run_mode, decision_date FROM forecast_cohorts "
+                "WHERE run_id = ? LIMIT 1",
+                (run_id,),
+            ).fetchone()
+            if cohort:
+                selected = connection.execute(
+                    """
+                    SELECT selected.run_id, owner.status, owner.workflow_complete
+                    FROM canonical_runs selected
+                    JOIN runs owner ON owner.id = selected.run_id
+                    WHERE policy_hash = ? AND run_mode = ? AND decision_date = ?
+                    """,
+                    (cohort["policy_hash"], cohort["run_mode"], cohort["decision_date"]),
+                ).fetchone()
+                if selected is None:
+                    raise ValueError("Daily completion has no canonical run lease.")
+                if selected["run_id"] != run_id and not (
+                    selected["status"] == RunStatus.SUCCEEDED.value
+                    and selected["workflow_complete"]
+                ):
+                    raise ValueError("Daily diagnostic completion is waiting on the canonical run.")
             connection.execute(
                 """
-                UPDATE runs SET status = ?, completed_at = ?, error = ? WHERE id = ?
+                UPDATE runs SET status = 'succeeded', workflow_complete = 1,
+                    completed_at = ?, error = NULL
+                WHERE id = ? AND status = 'running'
                 """,
-                (status.value, datetime.now(UTC).isoformat(), error, run_id),
+                (datetime.now(UTC).isoformat(), run_id),
+            )
+
+    @classmethod
+    def _invalidate_incomplete_run(
+        cls, connection: sqlite3.Connection, run_id: str, reason: str
+    ) -> None:
+        connection.execute(
+            "UPDATE forecast_cohorts SET is_canonical = 0 WHERE run_id = ?", (run_id,)
+        )
+        connection.execute("DELETE FROM canonical_runs WHERE run_id = ?", (run_id,))
+        proposals = connection.execute(
+            """
+            SELECT p.* FROM trade_proposals p
+            WHERE p.source_run_id = ?
+              AND NOT EXISTS (SELECT 1 FROM paper_fills f WHERE f.proposal_id = p.id)
+              AND (SELECT event_type FROM proposal_events e WHERE e.proposal_id = p.id
+                   ORDER BY sequence DESC LIMIT 1) IN ('PROPOSED', 'APPROVED')
+            """,
+            (run_id,),
+        ).fetchall()
+        now = datetime.now(UTC)
+        for proposal in proposals:
+            cls._append_proposal_event(
+                connection,
+                proposal,
+                "RUN_INVALIDATED",
+                "paper-policy",
+                reason,
+                now,
             )
 
     def store_payload(
@@ -462,6 +779,11 @@ class Database:
         endpoint: str,
         observed_at: datetime,
         payload: Any,
+        request_params_hash: str | None = None,
+        response_received_at: datetime | None = None,
+        http_status: int | None = None,
+        content_type: str | None = None,
+        request_manifest: list[dict[str, object]] | None = None,
     ) -> int:
         payload_json = canonical_json(payload)
         with self.connect() as connection:
@@ -469,8 +791,10 @@ class Database:
                 """
                 INSERT INTO provider_payloads (
                     run_id, provider, endpoint, fetched_at, observed_at,
-                    payload_json, payload_hash
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    payload_json, payload_hash, request_params_hash,
+                    response_received_at, http_status, content_type
+                    ,request_manifest_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -480,6 +804,13 @@ class Database:
                     observed_at.astimezone(UTC).isoformat(),
                     payload_json,
                     content_hash(payload_json),
+                    request_params_hash,
+                    response_received_at.astimezone(UTC).isoformat()
+                    if response_received_at
+                    else None,
+                    http_status,
+                    content_type,
+                    canonical_json(request_manifest or []),
                 ),
             )
             return int(cursor.lastrowid)
@@ -588,6 +919,8 @@ class Database:
         prompt_version: str,
         prompt: str,
         response_id: str | None,
+        retrieved_urls: tuple[str, ...] = (),
+        source_manifest: tuple[dict[str, Any], ...] = (),
     ) -> None:
         valid_narrative_ids = {item.narrative_id for item in landscape.narratives}
         updates = {
@@ -597,13 +930,27 @@ class Database:
         }
         reviews = {(item.narrative_id, item.project_id): item for item in result.project_reviews}
         gaps = list(dict.fromkeys([*landscape.data_gaps, *result.data_gaps]))
+        normalized_output = canonical_json(result.model_dump(mode="json"))
+        manifest_json = canonical_json(
+            list(source_manifest)
+            or sorted(
+                set(retrieved_urls)
+                or {source.url for event in result.key_events for source in event.sources}
+                | {source.url for update in result.narrative_updates for source in update.sources}
+                | {source.url for review in result.project_reviews for source in review.sources}
+            )
+        )
+        packet_hash = content_hash(
+            {"prompt": prompt, "normalized_output": normalized_output, "manifest": manifest_json}
+        )
         with self.connect() as connection:
             connection.execute(
                 """
                 INSERT INTO research_runs (
                     run_id, model, reasoning_effort, prompt_version, prompt_hash,
-                    response_id, market_regime, market_summary, data_gaps_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    response_id, market_regime, market_summary, data_gaps_json,
+                    prompt_text, normalized_output_json, source_manifest_json, packet_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -615,6 +962,10 @@ class Database:
                     landscape.market_regime,
                     result.market_summary,
                     canonical_json(gaps),
+                    prompt,
+                    normalized_output,
+                    manifest_json,
+                    packet_hash,
                 ),
             )
             connection.executemany(
@@ -660,7 +1011,7 @@ class Database:
                         item.asset_id,
                         item.rank,
                         item.score,
-                        int(item.eligible),
+                        int(item.research_eligible),
                         canonical_json(item.metrics.model_dump(mode="json")),
                         canonical_json(item.selection_notes),
                         canonical_json(
@@ -676,8 +1027,9 @@ class Database:
                 """
                 INSERT INTO market_events (
                     run_id, event_index, title, why_it_matters, direction,
-                    horizon, narrative_ids_json, sources_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    horizon, event_subject, event_type, event_at,
+                    narrative_ids_json, sources_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -687,6 +1039,9 @@ class Database:
                         item.why_it_matters,
                         item.direction,
                         item.horizon,
+                        item.event_subject,
+                        item.event_type,
+                        item.event_at.astimezone(UTC).isoformat() if item.event_at else None,
                         canonical_json(item.narrative_ids),
                         canonical_json([source.model_dump(mode="json") for source in item.sources]),
                     )
@@ -705,7 +1060,7 @@ class Database:
                 FROM dynamic_narratives d
                 JOIN runs r ON r.id = d.run_id
                 JOIN dynamic_research_runs dr ON dr.run_id = d.run_id
-                WHERE r.status = 'succeeded'
+                WHERE r.status = 'succeeded' AND r.workflow_complete = 1
                 {where_version}
                 ORDER BY r.started_at DESC
                 """,
@@ -717,7 +1072,7 @@ class Database:
                 FROM dynamic_narrative_memberships m
                 JOIN runs r ON r.id = m.run_id
                 JOIN dynamic_research_runs dr ON dr.run_id = m.run_id
-                WHERE r.status = 'succeeded'
+                WHERE r.status = 'succeeded' AND r.workflow_complete = 1
                 {where_version}
                 """,
                 parameters,
@@ -763,6 +1118,10 @@ class Database:
         response_id: str | None,
         policy: StrategyPolicy,
         run_mode: RunMode,
+        quality_prompt_version: str = "unknown",
+        retrieved_urls: tuple[str, ...] = (),
+        source_manifest: tuple[dict[str, Any], ...] = (),
+        dynamic_draft: DailyDynamicNarrativeDraft | None = None,
     ) -> None:
         dynamic_ids = {item.narrative_id for item in radar.narratives}
         reviews = {
@@ -770,16 +1129,46 @@ class Database:
             for item in result.project_reviews
             if item.narrative_id in dynamic_ids
         }
-        strategy_hash = content_hash(
-            {"policy_hash": policy.policy_hash, "dynamic_prompt_version": prompt_version}
+        # forecast_cohorts.policy_hash is the original database column name. It
+        # stores the complete research-strategy lineage (policy + prompt/evaluator
+        # versions), while paper_decisions.policy_hash stores the exact trading
+        # policy hash used for approval and settlement.
+        strategy_lineage_hash = content_hash(
+            {
+                "policy_hash": policy.policy_hash,
+                "dynamic_prompt_version": prompt_version,
+                "quality_prompt_version": quality_prompt_version,
+                "paper_evaluation_version": "paper-gates-v2",
+            }
+        )
+        normalized_output = canonical_json(radar.model_dump(mode="json"))
+        manifest_json = canonical_json(
+            list(source_manifest)
+            or sorted(
+                set(retrieved_urls)
+                or {source.url for item in radar.narratives for source in item.sources}
+            )
+        )
+        validated_draft = (
+            canonical_json(dynamic_draft.model_dump(mode="json")) if dynamic_draft else "{}"
+        )
+        packet_hash = content_hash(
+            {
+                "prompt": prompt,
+                "normalized_output": normalized_output,
+                "manifest": manifest_json,
+                "validated_draft": validated_draft,
+            }
         )
         with self.connect() as connection:
             connection.execute(
                 """
                 INSERT INTO dynamic_research_runs (
                     run_id, model, reasoning_effort, prompt_version, prompt_hash,
-                    response_id, data_gaps_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    response_id, data_gaps_json, prompt_text,
+                    normalized_output_json, source_manifest_json, validated_draft_json,
+                    packet_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -789,6 +1178,11 @@ class Database:
                     content_hash(prompt),
                     response_id,
                     canonical_json(radar.data_gaps),
+                    prompt,
+                    normalized_output,
+                    manifest_json,
+                    validated_draft,
+                    packet_hash,
                 ),
             )
             connection.executemany(
@@ -870,11 +1264,13 @@ class Database:
                 row[0]
                 for row in connection.execute(
                     """
-                    SELECT DISTINCT decision_date
-                    FROM forecast_cohorts
-                    WHERE is_canonical = 1 AND run_mode = 'live' AND policy_hash = ?
+                    SELECT DISTINCT c.decision_date
+                    FROM forecast_cohorts c JOIN runs r ON r.id = c.run_id
+                    WHERE c.is_canonical = 1 AND c.run_mode = 'live'
+                      AND c.policy_hash = ? AND r.status = 'succeeded'
+                      AND r.workflow_complete = 1
                     """,
-                    (strategy_hash,),
+                    (strategy_lineage_hash,),
                 )
             }
             if run_mode is RunMode.LIVE:
@@ -917,7 +1313,7 @@ class Database:
                         radar.as_of.astimezone(UTC).isoformat(),
                         radar.as_of.date().isoformat(),
                         run_mode.value,
-                        strategy_hash,
+                        strategy_lineage_hash,
                         int(
                             history_days >= policy.minimum_prospective_days
                             and item.state.value in policy.dynamic_entry_states
@@ -925,46 +1321,6 @@ class Database:
                     )
                     for item in radar.narratives
                 ],
-            )
-            qualified = sum(
-                item.state.value in policy.dynamic_entry_states for item in radar.narratives
-            )
-            if run_mode is not RunMode.LIVE:
-                readiness = "BLOCKED_OFFLINE_OBSERVATION"
-                reason = "Offline observations do not count toward the live prospective burn-in."
-            elif history_days < policy.minimum_prospective_days:
-                readiness = "BLOCKED_INSUFFICIENT_HISTORY"
-                reason = (
-                    f"Live canonical history is {history_days}/"
-                    f"{policy.minimum_prospective_days} consecutive days."
-                )
-            elif qualified:
-                readiness = "BLOCKED_INVESTABILITY_NOT_IMPLEMENTED"
-                reason = (
-                    "A narrative is research-qualified, but venue, cost, unlock, contract, "
-                    "and security gates are not implemented."
-                )
-            else:
-                readiness = "NO_RESEARCH_QUALIFIED_NARRATIVE"
-                reason = "No dynamic narrative passed the research-promotion gate."
-            connection.execute(
-                """
-                INSERT INTO paper_decisions (
-                    run_id, policy_version, action, reason, prospective_days,
-                    qualified_narrative_count, created_at, readiness_state,
-                    policy_hash
-                ) VALUES (?, ?, 'NO_ACTION', ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    run_id,
-                    policy.version,
-                    reason,
-                    history_days,
-                    qualified,
-                    datetime.now(UTC).isoformat(),
-                    readiness,
-                    strategy_hash,
-                ),
             )
 
     @staticmethod
@@ -1003,20 +1359,869 @@ class Database:
             UPDATE forecast_cohorts AS current
             SET is_canonical = 1
             WHERE current.run_id = ?
-              AND NOT EXISTS (
-                SELECT 1
-                FROM forecast_cohorts prior
-                JOIN runs prior_run ON prior_run.id = prior.run_id
-                WHERE prior.is_canonical = 1
-                  AND prior_run.status = 'succeeded'
-                  AND prior.strategy_version = current.strategy_version
-                  AND prior.run_mode = current.run_mode
-                  AND prior.decision_date = current.decision_date
-                  AND prior.narrative_id = current.narrative_id
+              AND EXISTS (
+                SELECT 1 FROM canonical_runs selected
+                WHERE selected.run_id = current.run_id
+                  AND selected.policy_hash = current.policy_hash
+                  AND selected.run_mode = current.run_mode
+                  AND selected.decision_date = current.decision_date
               )
             """,
             (run_id,),
         )
+
+    def prospective_days_for_run(self, run_id: str) -> int:
+        """Count the current consecutive live episode under one exact strategy lineage."""
+        with self.connect() as connection:
+            cohort = connection.execute(
+                """
+                SELECT policy_hash, decision_date, run_mode
+                FROM forecast_cohorts WHERE run_id = ? LIMIT 1
+                """,
+                (run_id,),
+            ).fetchone()
+            if cohort is None or cohort["run_mode"] != RunMode.LIVE.value:
+                return 0
+            dates = {
+                row[0]
+                for row in connection.execute(
+                    """
+                    SELECT selected.decision_date FROM canonical_runs selected
+                    JOIN runs r ON r.id = selected.run_id
+                    WHERE selected.policy_hash = ? AND selected.run_mode = 'live'
+                      AND r.status = 'succeeded' AND r.workflow_complete = 1
+                    """,
+                    (cohort["policy_hash"],),
+                )
+            }
+            dates.add(cohort["decision_date"])
+        cursor = date.fromisoformat(cohort["decision_date"])
+        days = 0
+        while cursor.isoformat() in dates:
+            days += 1
+            cursor = date.fromordinal(cursor.toordinal() - 1)
+        return days
+
+    def finalize_canonical_run(self, run_id: str) -> bool:
+        """Lease one run per research-strategy lineage/date, never per narrative."""
+        with self.connect() as connection:
+            run = connection.execute("SELECT status FROM runs WHERE id = ?", (run_id,)).fetchone()
+            cohort = connection.execute(
+                """
+                SELECT policy_hash, run_mode, decision_date
+                FROM forecast_cohorts WHERE run_id = ? LIMIT 1
+                """,
+                (run_id,),
+            ).fetchone()
+            if run is None or run["status"] not in {
+                RunStatus.RUNNING.value,
+                RunStatus.SUCCEEDED.value,
+            }:
+                raise ValueError("A canonical run must be running or succeeded.")
+            if cohort is None:
+                return False
+            lease_cutoff = (datetime.now(UTC) - CANONICAL_LEASE_TTL).isoformat()
+            invalid = connection.execute(
+                """
+                SELECT selected.run_id FROM canonical_runs selected
+                JOIN runs r ON r.id = selected.run_id
+                WHERE selected.policy_hash = ? AND selected.run_mode = ?
+                  AND selected.decision_date = ?
+                  AND (
+                    r.status = 'failed'
+                    OR (r.status = 'succeeded' AND r.workflow_complete = 0)
+                    OR (
+                        r.status = 'running' AND selected.run_id != ?
+                        AND selected.created_at <= ?
+                    )
+                  )
+                """,
+                (
+                    cohort["policy_hash"],
+                    cohort["run_mode"],
+                    cohort["decision_date"],
+                    run_id,
+                    lease_cutoff,
+                ),
+            ).fetchone()
+            if invalid:
+                stale = connection.execute(
+                    "SELECT status FROM runs WHERE id = ?", (invalid["run_id"],)
+                ).fetchone()
+                if stale and stale["status"] == RunStatus.RUNNING.value:
+                    connection.execute(
+                        """
+                        UPDATE runs SET status = 'failed', workflow_complete = 0,
+                            completed_at = ?, error = ?
+                        WHERE id = ? AND status = 'running'
+                        """,
+                        (
+                            datetime.now(UTC).isoformat(),
+                            f"Canonical lease superseded by {run_id}.",
+                            invalid["run_id"],
+                        ),
+                    )
+                self._invalidate_incomplete_run(
+                    connection,
+                    invalid["run_id"],
+                    f"Canonical lease superseded by {run_id}.",
+                )
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO canonical_runs (
+                    policy_hash, run_mode, decision_date, run_id, created_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    cohort["policy_hash"],
+                    cohort["run_mode"],
+                    cohort["decision_date"],
+                    run_id,
+                    datetime.now(UTC).isoformat(),
+                ),
+            )
+            selected = connection.execute(
+                """
+                SELECT run_id FROM canonical_runs
+                WHERE policy_hash = ? AND run_mode = ? AND decision_date = ?
+                """,
+                (cohort["policy_hash"], cohort["run_mode"], cohort["decision_date"]),
+            ).fetchone()
+            is_canonical = bool(selected and selected["run_id"] == run_id)
+            if is_canonical:
+                self._finalize_canonical_cohorts(connection, run_id)
+            return is_canonical
+
+    def store_paper_evidence(
+        self,
+        *,
+        run_id: str,
+        investability: InvestabilityDataBundle,
+        evaluation: PaperEvaluation,
+        policy: StrategyPolicy,
+    ) -> None:
+        now = datetime.now(UTC).isoformat()
+        portfolio_id = f"paper-{policy.policy_hash[:16]}"
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO strategy_policy_versions (
+                    policy_hash, version, policy_json, created_at
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (policy.policy_hash, policy.version, policy.policy_json, now),
+            )
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO paper_portfolios (
+                    id, policy_hash, initial_cash_usd, created_at
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (portfolio_id, policy.policy_hash, policy.paper_initial_cash_usd, now),
+            )
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO portfolio_cash_ledger (
+                    portfolio_id, event_type, amount_usd, reference_type,
+                    reference_id, created_at
+                ) VALUES (?, 'initial_funding', ?, 'policy', ?, ?)
+                """,
+                (portfolio_id, policy.paper_initial_cash_usd, policy.policy_hash, now),
+            )
+            for asset in investability.assets:
+                for quote in asset.quotes:
+                    quote_json = canonical_json(quote.model_dump(mode="json"))
+                    quote_hash = content_hash(quote_json)
+                    quote_id = f"quote-{quote_hash[:24]}"
+                    connection.execute(
+                        """
+                        INSERT OR IGNORE INTO venue_quote_snapshots (
+                            id, run_id, asset_id, provider, venue, pair,
+                            observed_at, quote_json, quote_hash
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            quote_id,
+                            run_id,
+                            quote.asset_id,
+                            quote.provider,
+                            quote.venue,
+                            quote.pair,
+                            quote.observed_at.astimezone(UTC).isoformat(),
+                            quote_json,
+                            quote_hash,
+                        ),
+                    )
+            for candidate in evaluation.candidates:
+                assessment_json = canonical_json(candidate.model_dump(mode="json"))
+                connection.execute(
+                    """
+                    INSERT INTO paper_candidate_assessments (
+                        run_id, narrative_id, asset_id, state, research_priority,
+                        assessment_json, assessment_hash, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        run_id,
+                        candidate.narrative_id,
+                        candidate.asset_id,
+                        candidate.state.value,
+                        candidate.research_priority,
+                        assessment_json,
+                        content_hash(assessment_json),
+                        now,
+                    ),
+                )
+
+    def store_venue_quotes(
+        self,
+        *,
+        run_id: str,
+        investability: InvestabilityDataBundle,
+    ) -> None:
+        with self.connect() as connection:
+            for asset in investability.assets:
+                for quote in asset.quotes:
+                    quote_json = canonical_json(quote.model_dump(mode="json"))
+                    quote_hash = content_hash(quote_json)
+                    connection.execute(
+                        """
+                        INSERT OR IGNORE INTO venue_quote_snapshots (
+                            id, run_id, asset_id, provider, venue, pair,
+                            observed_at, quote_json, quote_hash
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            f"quote-{quote_hash[:24]}",
+                            run_id,
+                            quote.asset_id,
+                            quote.provider,
+                            quote.venue,
+                            quote.pair,
+                            quote.observed_at.astimezone(UTC).isoformat(),
+                            quote_json,
+                            quote_hash,
+                        ),
+                    )
+
+    def proposal(self, proposal_id: str) -> dict[str, Any]:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM trade_proposals WHERE id = ?", (proposal_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"Unknown paper proposal: {proposal_id}")
+        return dict(row)
+
+    def settle_approved_entries(
+        self,
+        *,
+        quote_run_id: str,
+        policy: StrategyPolicy,
+        proposal_id: str | None = None,
+    ) -> list[str]:
+        """Use the first post-approval quote; never select a more favorable later quote."""
+        filled: list[str] = []
+        now = datetime.now(UTC)
+        with self.connect() as connection:
+            run = connection.execute(
+                "SELECT status, workflow_complete FROM runs WHERE id = ?", (quote_run_id,)
+            ).fetchone()
+            if (
+                run is None
+                or run["status"] != RunStatus.SUCCEEDED.value
+                or not run["workflow_complete"]
+            ):
+                raise ValueError("Paper fills require a completed succeeded quote run.")
+            parameters: tuple[Any, ...] = (
+                (policy.policy_hash, proposal_id) if proposal_id else (policy.policy_hash,)
+            )
+            where = "AND p.id = ?" if proposal_id else ""
+            proposals = connection.execute(
+                f"""
+                SELECT p.*, approved.created_at AS approved_at,
+                       approved.sequence AS approved_sequence
+                FROM trade_proposals p
+                JOIN proposal_events approved ON approved.proposal_id = p.id
+                 AND approved.event_type = 'APPROVED'
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM paper_fills f WHERE f.proposal_id = p.id
+                )
+                  AND p.policy_hash = ?
+                  AND approved.sequence = (
+                    SELECT MAX(sequence) FROM proposal_events WHERE proposal_id = p.id
+                  )
+                  {where}
+                ORDER BY approved.created_at
+                """,
+                parameters,
+            ).fetchall()
+            for proposal in proposals:
+                approved_at = datetime.fromisoformat(proposal["approved_at"])
+                deadline = datetime.fromisoformat(proposal["approval_deadline"])
+                quote_row = connection.execute(
+                    """
+                    SELECT q.* FROM venue_quote_snapshots q
+                    JOIN runs r ON r.id = q.run_id
+                    WHERE q.asset_id = ? AND q.venue = ? AND q.pair = ?
+                      AND q.observed_at > ? AND q.observed_at <= ?
+                      AND r.status = 'succeeded' AND r.workflow_complete = 1
+                    ORDER BY q.observed_at ASC, q.id ASC LIMIT 1
+                    """,
+                    (
+                        proposal["asset_id"],
+                        proposal["venue"],
+                        proposal["pair"],
+                        approved_at.isoformat(),
+                        deadline.isoformat(),
+                    ),
+                ).fetchone()
+                if quote_row is None:
+                    if now > deadline:
+                        self._append_proposal_event(
+                            connection,
+                            proposal,
+                            "EXPIRED",
+                            "paper-policy",
+                            "No post-approval quote arrived before expiry.",
+                            now,
+                        )
+                    continue
+                quote = json.loads(quote_row["quote_json"])
+                rejection = self._fill_rejection_reason(connection, proposal, quote, policy, now)
+                if rejection:
+                    self._append_proposal_event(
+                        connection,
+                        proposal,
+                        "REQUOTE_REQUIRED",
+                        "paper-policy",
+                        rejection,
+                        now,
+                        quote_row["id"],
+                    )
+                    continue
+                price = float(quote["buy_vwap_price"])
+                quantity = float(proposal["proposed_quantity"])
+                gross = price * quantity
+                fee = gross * float(quote["taker_fee_bps"] or 0) / 10_000
+                fill_id = f"fill-{uuid.uuid4().hex[:16]}"
+                connection.execute(
+                    """
+                    INSERT INTO paper_fills (
+                        id, proposal_id, fill_run_id, quote_id, side, quantity,
+                        execution_price, gross_notional_usd, fee_usd,
+                        total_cost_bps, executed_at, fill_model_version
+                    ) VALUES (?, ?, ?, ?, 'buy', ?, ?, ?, ?, ?, ?, 'book-walk-v1')
+                    """,
+                    (
+                        fill_id,
+                        proposal["id"],
+                        quote_row["run_id"],
+                        quote_row["id"],
+                        quantity,
+                        price,
+                        gross,
+                        fee,
+                        float(quote["estimated_round_trip_cost_bps"]),
+                        now.isoformat(),
+                    ),
+                )
+                connection.executemany(
+                    """
+                    INSERT INTO portfolio_cash_ledger (
+                        portfolio_id, event_type, amount_usd, reference_type,
+                        reference_id, created_at
+                    ) VALUES (?, ?, ?, 'fill', ?, ?)
+                    """,
+                    [
+                        (
+                            proposal["portfolio_id"],
+                            "entry_principal",
+                            -gross,
+                            fill_id,
+                            now.isoformat(),
+                        ),
+                        (
+                            proposal["portfolio_id"],
+                            "entry_fee",
+                            -fee,
+                            fill_id,
+                            now.isoformat(),
+                        ),
+                    ],
+                )
+                position_id = f"position-{uuid.uuid4().hex[:16]}"
+                connection.execute(
+                    """
+                    INSERT INTO paper_positions (
+                        id, portfolio_id, opening_fill_id, narrative_id,
+                        asset_id, quantity, opened_at, planned_exit_at,
+                        initial_stop_price
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        position_id,
+                        proposal["portfolio_id"],
+                        fill_id,
+                        proposal["narrative_id"],
+                        proposal["asset_id"],
+                        quantity,
+                        now.isoformat(),
+                        proposal["planned_exit_at"],
+                        proposal["stop_price"],
+                    ),
+                )
+                self._append_proposal_event(
+                    connection,
+                    proposal,
+                    "FILLED",
+                    "paper-policy",
+                    "First qualifying post-approval quote filled the all-or-none paper order.",
+                    now,
+                    quote_row["id"],
+                )
+                filled.append(fill_id)
+        return filled
+
+    @staticmethod
+    def _append_proposal_event(
+        connection: sqlite3.Connection,
+        proposal: sqlite3.Row,
+        event_type: str,
+        actor: str,
+        reason: str,
+        created_at: datetime,
+        quote_id: str | None = None,
+    ) -> None:
+        sequence = connection.execute(
+            "SELECT MAX(sequence) FROM proposal_events WHERE proposal_id = ?",
+            (proposal["id"],),
+        ).fetchone()[0]
+        connection.execute(
+            """
+            INSERT INTO proposal_events (
+                proposal_id, sequence, event_type, actor, proposal_hash,
+                reason, created_at, quote_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                proposal["id"],
+                int(sequence) + 1,
+                event_type,
+                actor,
+                proposal["proposal_hash"],
+                reason,
+                created_at.isoformat(),
+                quote_id,
+            ),
+        )
+
+    @staticmethod
+    def _fill_rejection_reason(
+        connection: sqlite3.Connection,
+        proposal: sqlite3.Row,
+        quote: dict[str, Any],
+        policy: StrategyPolicy,
+        now: datetime,
+    ) -> str | None:
+        if proposal["policy_hash"] != policy.policy_hash:
+            return "The proposal policy no longer matches the active settlement policy."
+        observed_at = datetime.fromisoformat(str(quote["observed_at"]))
+        if (now - observed_at).total_seconds() > policy.maximum_quote_age_seconds:
+            return "The first post-approval quote was stale."
+        if not quote.get("executable") or not quote.get("pair_online"):
+            return "The approved venue route was not executable and online."
+        if proposal["contract_address"] != quote.get("contract_address"):
+            return "The quote contract did not match the approved proposal."
+        price = quote.get("buy_vwap_price")
+        if not price or float(price) > float(proposal["maximum_entry_price"]):
+            return "The first post-approval price exceeded the approved tolerance."
+        costs = quote.get("estimated_round_trip_cost_bps")
+        if costs is None or float(costs) > policy.maximum_round_trip_cost_pct * 100:
+            return "Estimated round-trip costs exceeded policy."
+        notional = float(proposal["proposed_quantity"]) * float(price)
+        maximum_position = policy.paper_initial_cash_usd * policy.maximum_position_nav_pct / 100
+        if notional > maximum_position + 0.005:
+            return "The fill price would breach the per-position paper NAV cap."
+        stop_price = float(proposal["stop_price"] or 0)
+        if stop_price <= 0 or stop_price >= float(price):
+            return "The approved absolute stop is invalid at the post-approval fill price."
+        stop_loss = notional * (float(price) - stop_price) / float(price)
+        stressed_initial_loss = stop_loss + notional * float(costs) / 10_000
+        maximum_initial_loss = (
+            policy.paper_initial_cash_usd * policy.maximum_initial_risk_nav_pct / 100
+        )
+        packet_maximum_loss = float(proposal["maximum_initial_loss_usd"] or 0)
+        approved_loss_limit = min(maximum_initial_loss, packet_maximum_loss)
+        if stressed_initial_loss > approved_loss_limit + 0.005:
+            return (
+                "The post-approval price and costs would breach the human-approved "
+                "maximum-loss packet."
+            )
+        required_depth = notional / (policy.maximum_depth_utilization_pct / 100)
+        if float(quote.get("buy_depth_1pct_usd") or 0) < required_depth:
+            return "Approved size would use too much ask-side depth."
+        if float(quote.get("sell_depth_1pct_usd") or 0) < required_depth:
+            return "Approved size would use too much exit-side depth."
+        cash = float(
+            connection.execute(
+                """
+                SELECT COALESCE(SUM(amount_usd), 0) FROM portfolio_cash_ledger
+                WHERE portfolio_id = ?
+                """,
+                (proposal["portfolio_id"],),
+            ).fetchone()[0]
+        )
+        fee = notional * float(quote.get("taker_fee_bps") or 0) / 10_000
+        if cash < notional + fee:
+            return "Paper cash no longer covers the approved fill and fee."
+        open_rows = connection.execute(
+            "SELECT narrative_id, asset_id FROM paper_positions WHERE portfolio_id = ?",
+            (proposal["portfolio_id"],),
+        ).fetchall()
+        if len(open_rows) >= policy.maximum_open_positions:
+            return "The open-position limit changed before fill."
+        if any(row["asset_id"] == proposal["asset_id"] for row in open_rows):
+            return "The paper portfolio already owns this asset."
+        if any(row["narrative_id"] == proposal["narrative_id"] for row in open_rows):
+            return "The paper portfolio already has this narrative exposure."
+        recent = connection.execute(
+            """
+            SELECT COUNT(*) FROM paper_fills f
+            JOIN trade_proposals p ON p.id = f.proposal_id
+            WHERE p.portfolio_id = ? AND f.side = 'buy' AND f.executed_at >= ?
+            """,
+            (proposal["portfolio_id"], (now - timedelta(days=7)).isoformat()),
+        ).fetchone()[0]
+        if recent >= policy.maximum_new_entries_per_rolling_7d:
+            return "The rolling seven-day filled-entry cadence changed before fill."
+        deployed = float(
+            connection.execute(
+                """
+                SELECT COALESCE(SUM(f.gross_notional_usd), 0)
+                FROM paper_positions pos JOIN paper_fills f ON f.id = pos.opening_fill_id
+                WHERE pos.portfolio_id = ?
+                """,
+                (proposal["portfolio_id"],),
+            ).fetchone()[0]
+        )
+        maximum_deployed = policy.paper_initial_cash_usd * policy.maximum_deployed_nav_pct / 100
+        if deployed + notional > maximum_deployed:
+            return "The maximum deployed paper NAV would be exceeded."
+        return None
+
+    def finalize_paper_decision(
+        self,
+        *,
+        run_id: str,
+        evaluation: PaperEvaluation,
+        policy: StrategyPolicy,
+        is_canonical: bool,
+        run_mode: RunMode,
+    ) -> str | None:
+        """Persist one decision and, at most, one immutable entry proposal."""
+        now = datetime.now(UTC)
+        proposal_id = None
+        portfolio_id = f"paper-{policy.policy_hash[:16]}"
+        qualified = sum(item.state.value != "research_only" for item in evaluation.candidates)
+        with self.connect() as connection:
+            run = connection.execute("SELECT status FROM runs WHERE id = ?", (run_id,)).fetchone()
+            if run is None or run["status"] not in {
+                RunStatus.RUNNING.value,
+                RunStatus.SUCCEEDED.value,
+            }:
+                raise ValueError("Paper decisions require a running or succeeded evidence run.")
+            proposable = [
+                item for item in evaluation.candidates if item.state.value == "proposable"
+            ]
+            if run_mode is not RunMode.LIVE:
+                readiness = "BLOCKED_OFFLINE_OBSERVATION"
+                reason = "Offline evidence cannot originate a paper proposal."
+            elif not is_canonical:
+                readiness = "BLOCKED_NONCANONICAL_RERUN"
+                reason = "Only the first complete scheduled run for the policy/date may propose."
+            elif evaluation.prospective_days < policy.minimum_prospective_days:
+                readiness = "BLOCKED_INSUFFICIENT_HISTORY"
+                reason = (
+                    f"Canonical live history is {evaluation.prospective_days}/"
+                    f"{policy.minimum_prospective_days} consecutive days."
+                )
+            elif not proposable:
+                states = {item.state.value for item in evaluation.candidates}
+                if "investability_verified" in states:
+                    readiness = "WAITING_FOR_TECHNICAL_ENTRY"
+                elif "research_qualified" in states:
+                    readiness = "BLOCKED_INVESTABILITY"
+                else:
+                    readiness = "NO_RESEARCH_QUALIFIED_CANDIDATE"
+                reason = (
+                    "; ".join(evaluation.candidates[0].reasons[:2])
+                    if evaluation.candidates
+                    else "No bounded project candidate was available for investability checks."
+                )
+            else:
+                candidate = proposable[0]
+                capacity_reason = self._paper_capacity_reason(connection, portfolio_id, policy, now)
+                if capacity_reason:
+                    readiness = "BLOCKED_PORTFOLIO_POLICY"
+                    reason = capacity_reason
+                elif (
+                    not candidate.quote
+                    or not candidate.technical
+                    or not candidate.proposed_notional_usd
+                ):
+                    readiness = "BLOCKED_INCOMPLETE_PROPOSAL_PACKET"
+                    reason = "A proposal packet is missing a quote, stop, or deterministic size."
+                else:
+                    quote_json = canonical_json(candidate.quote.model_dump(mode="json"))
+                    quote_id = f"quote-{content_hash(quote_json)[:24]}"
+                    price = float(candidate.quote.buy_vwap_price or 0)
+                    notional = float(candidate.proposed_notional_usd)
+                    quantity = notional / price
+                    proposal_id = f"proposal-{uuid.uuid4().hex[:16]}"
+                    deadline = now + timedelta(hours=policy.approval_ttl_hours)
+                    planned_exit = now + timedelta(days=policy.paper_horizon_days)
+                    packet = {
+                        "candidate": candidate.model_dump(mode="json"),
+                        "policy_hash": policy.policy_hash,
+                        "source_run_id": run_id,
+                        "approval_semantics": (
+                            "Approval binds this exact packet and permits only a post-approval "
+                            "paper quote; it is not a fill or live order."
+                        ),
+                    }
+                    proposal_json = canonical_json(packet)
+                    proposal_hash = content_hash(proposal_json)
+                    connection.execute(
+                        """
+                        INSERT INTO trade_proposals (
+                            id, portfolio_id, source_run_id, narrative_id, asset_id,
+                            intent, venue_quote_id, venue, pair, chain_id,
+                            contract_address, proposed_notional_usd, proposed_quantity,
+                            decision_price, maximum_entry_price, stop_price,
+                            maximum_initial_loss_usd, policy_hash, proposal_json,
+                            proposal_hash, created_at, approval_deadline, planned_exit_at
+                        ) VALUES (
+                            ?, ?, ?, ?, ?, 'entry', ?, ?, ?, ?, ?, ?,
+                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                        )
+                        """,
+                        (
+                            proposal_id,
+                            portfolio_id,
+                            run_id,
+                            candidate.narrative_id,
+                            candidate.asset_id,
+                            quote_id,
+                            candidate.quote.venue,
+                            candidate.quote.pair,
+                            candidate.quote.chain_id,
+                            candidate.quote.contract_address,
+                            notional,
+                            quantity,
+                            price,
+                            price * (1 + policy.maximum_approval_price_move_pct / 100),
+                            candidate.technical.stop_price,
+                            candidate.maximum_initial_loss_usd,
+                            policy.policy_hash,
+                            proposal_json,
+                            proposal_hash,
+                            now.isoformat(),
+                            deadline.isoformat(),
+                            planned_exit.isoformat(),
+                        ),
+                    )
+                    connection.execute(
+                        """
+                        INSERT INTO proposal_events (
+                            proposal_id, sequence, event_type, actor, proposal_hash,
+                            reason, created_at, quote_id
+                        ) VALUES (?, 1, 'PROPOSED', 'system', ?, ?, ?, ?)
+                        """,
+                        (
+                            proposal_id,
+                            proposal_hash,
+                            "All deterministic research, investability, technical, and "
+                            "portfolio gates passed.",
+                            now.isoformat(),
+                            quote_id,
+                        ),
+                    )
+                    readiness = "PROPOSAL_AWAITING_HUMAN"
+                    reason = (
+                        f"{candidate.asset_name} passed every paper-v1 gate; approval is required."
+                    )
+            connection.execute(
+                """
+                INSERT INTO paper_decisions (
+                    run_id, policy_version, action, reason, prospective_days,
+                    qualified_narrative_count, created_at, readiness_state,
+                    policy_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    policy.version,
+                    "PROPOSE_ENTRY" if proposal_id else "NO_ACTION",
+                    reason,
+                    evaluation.prospective_days,
+                    qualified,
+                    now.isoformat(),
+                    readiness,
+                    policy.policy_hash,
+                ),
+            )
+        return proposal_id
+
+    @staticmethod
+    def _paper_capacity_reason(
+        connection: sqlite3.Connection,
+        portfolio_id: str,
+        policy: StrategyPolicy,
+        now: datetime,
+    ) -> str | None:
+        open_count = connection.execute(
+            "SELECT COUNT(*) FROM paper_positions WHERE portfolio_id = ?",
+            (portfolio_id,),
+        ).fetchone()[0]
+        if open_count >= policy.maximum_open_positions:
+            return f"Portfolio already has {open_count} open positions."
+        recent_entries = connection.execute(
+            """
+            SELECT COUNT(*) FROM paper_fills f
+            JOIN trade_proposals p ON p.id = f.proposal_id
+            WHERE p.portfolio_id = ? AND f.side = 'buy' AND f.executed_at >= ?
+            """,
+            (portfolio_id, (now - timedelta(days=7)).isoformat()),
+        ).fetchone()[0]
+        if recent_entries >= policy.maximum_new_entries_per_rolling_7d:
+            return "The rolling seven-day filled-entry cadence is exhausted."
+        active = connection.execute(
+            """
+            SELECT COUNT(*) FROM trade_proposals p
+            WHERE p.portfolio_id = ?
+              AND NOT EXISTS (SELECT 1 FROM paper_fills f WHERE f.proposal_id = p.id)
+              AND (SELECT event_type FROM proposal_events e
+                   WHERE e.proposal_id = p.id ORDER BY sequence DESC LIMIT 1)
+                  IN ('PROPOSED', 'APPROVED')
+            """,
+            (portfolio_id,),
+        ).fetchone()[0]
+        if active:
+            return "Another entry proposal is already awaiting a terminal outcome."
+        cash = connection.execute(
+            "SELECT COALESCE(SUM(amount_usd), 0) FROM portfolio_cash_ledger WHERE portfolio_id = ?",
+            (portfolio_id,),
+        ).fetchone()[0]
+        if cash <= 0:
+            return "Paper portfolio has no available cash."
+        return None
+
+    def paper_assets_requiring_quotes(self) -> list[str]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT asset_id FROM paper_positions
+                UNION
+                SELECT p.asset_id FROM trade_proposals p
+                JOIN runs r ON r.id = p.source_run_id
+                WHERE r.status = 'succeeded' AND r.workflow_complete = 1
+                  AND NOT EXISTS (SELECT 1 FROM paper_fills f WHERE f.proposal_id = p.id)
+                  AND (SELECT event_type FROM proposal_events e
+                       WHERE e.proposal_id = p.id ORDER BY sequence DESC LIMIT 1)
+                      IN ('PROPOSED', 'APPROVED')
+                """
+            ).fetchall()
+        return [row["asset_id"] for row in rows]
+
+    def list_paper_proposals(self, *, active_only: bool = False) -> list[dict[str, Any]]:
+        where = (
+            "WHERE latest.event_type IN ('PROPOSED', 'APPROVED') AND f.id IS NULL"
+            if active_only
+            else ""
+        )
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT p.*, latest.event_type AS status, latest.created_at AS status_at,
+                       f.id AS fill_id
+                FROM trade_proposals p
+                JOIN proposal_events latest ON latest.proposal_id = p.id
+                 AND latest.sequence = (
+                    SELECT MAX(sequence) FROM proposal_events WHERE proposal_id = p.id
+                 )
+                LEFT JOIN paper_fills f ON f.proposal_id = p.id
+                {where}
+                ORDER BY p.created_at DESC
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def record_proposal_response(
+        self,
+        proposal_id: str,
+        *,
+        approve: bool,
+        actor: str = "human",
+        reason: str = "",
+        expected_policy_hash: str | None = None,
+    ) -> None:
+        now = datetime.now(UTC)
+        with self.connect() as connection:
+            proposal = connection.execute(
+                """
+                SELECT p.*, r.status AS run_status,
+                       r.workflow_complete AS run_workflow_complete,
+                       (SELECT event_type FROM proposal_events e
+                        WHERE e.proposal_id = p.id ORDER BY sequence DESC LIMIT 1) AS status,
+                       (SELECT MAX(sequence) FROM proposal_events e
+                        WHERE e.proposal_id = p.id) AS sequence
+                FROM trade_proposals p JOIN runs r ON r.id = p.source_run_id
+                WHERE p.id = ?
+                """,
+                (proposal_id,),
+            ).fetchone()
+            if proposal is None:
+                raise KeyError(f"Unknown paper proposal: {proposal_id}")
+            if proposal["run_status"] != RunStatus.SUCCEEDED.value:
+                raise ValueError("A failed evidence run cannot be approved.")
+            if not proposal["run_workflow_complete"]:
+                raise ValueError("An incomplete daily workflow cannot be approved.")
+            if approve and not expected_policy_hash:
+                raise ValueError("Approval requires the caller's exact active policy hash.")
+            if approve and expected_policy_hash and proposal["policy_hash"] != expected_policy_hash:
+                raise ValueError(
+                    "The proposal was created under a different strategy policy and cannot be "
+                    "approved."
+                )
+            if proposal["status"] != "PROPOSED":
+                raise ValueError(f"Proposal is already {proposal['status']}.")
+            event_type = "APPROVED" if approve else "REJECTED"
+            if approve and now > datetime.fromisoformat(proposal["approval_deadline"]):
+                event_type = "EXPIRED"
+                reason = reason or "Approval arrived after the packet deadline."
+            connection.execute(
+                """
+                INSERT INTO proposal_events (
+                    proposal_id, sequence, event_type, actor, proposal_hash,
+                    reason, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    proposal_id,
+                    int(proposal["sequence"]) + 1,
+                    event_type,
+                    actor,
+                    proposal["proposal_hash"],
+                    reason
+                    or (
+                        "Human approved the exact paper packet."
+                        if approve
+                        else "Human rejected the paper packet."
+                    ),
+                    now.isoformat(),
+                ),
+            )
 
     def record_forecast_outcomes(
         self,
@@ -1030,15 +2235,43 @@ class Database:
         }
         with self.connect() as connection:
             observation = connection.execute(
-                "SELECT status FROM runs WHERE id = ?", (observation_run_id,)
+                "SELECT status, workflow_complete FROM runs WHERE id = ?", (observation_run_id,)
             ).fetchone()
-            if observation is None or observation["status"] != RunStatus.SUCCEEDED.value:
-                raise ValueError("Forecast outcomes require a succeeded observation run.")
+            if (
+                observation is None
+                or observation["status"] != RunStatus.SUCCEEDED.value
+                or not observation["workflow_complete"]
+            ):
+                raise ValueError("Forecast outcomes require a completed succeeded observation.")
+            current_cohort = connection.execute(
+                """
+                SELECT policy_hash, run_mode, decision_date
+                FROM forecast_cohorts WHERE run_id = ? LIMIT 1
+                """,
+                (observation_run_id,),
+            ).fetchone()
+            if current_cohort:
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO canonical_runs (
+                        policy_hash, run_mode, decision_date, run_id, created_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        current_cohort["policy_hash"],
+                        current_cohort["run_mode"],
+                        current_cohort["decision_date"],
+                        observation_run_id,
+                        datetime.now(UTC).isoformat(),
+                    ),
+                )
+                self._finalize_canonical_cohorts(connection, observation_run_id)
             cohorts = connection.execute(
                 """
                 SELECT c.*, r.as_of
                 FROM forecast_cohorts c JOIN runs r ON r.id = c.run_id
                 WHERE c.is_canonical = 1 AND r.status = 'succeeded'
+                  AND r.workflow_complete = 1
                 ORDER BY r.as_of
                 """
             ).fetchall()
@@ -1424,16 +2657,97 @@ class Database:
                 "SELECT * FROM social_window_metrics WHERE run_id = ?",
                 (run_id,),
             ).fetchall()
+            provider_fetch = connection.execute(
+                """
+                SELECT MAX(response_received_at) AS latest_response_at,
+                       SUM(CASE WHEN response_received_at IS NOT NULL THEN 1 ELSE 0 END)
+                           AS received_payloads
+                FROM provider_payloads WHERE run_id = ?
+                """,
+                (run_id,),
+            ).fetchone()
             paper_decision = connection.execute(
                 "SELECT * FROM paper_decisions WHERE run_id = ?",
                 (run_id,),
             ).fetchone()
+            paper_candidates = connection.execute(
+                """
+                SELECT * FROM paper_candidate_assessments
+                WHERE run_id = ? ORDER BY research_priority DESC
+                """,
+                (run_id,),
+            ).fetchall()
+            paper_proposals = connection.execute(
+                """
+                SELECT p.*, latest.event_type AS status, latest.created_at AS status_at
+                FROM trade_proposals p
+                JOIN proposal_events latest ON latest.proposal_id = p.id
+                 AND latest.sequence = (
+                    SELECT MAX(sequence) FROM proposal_events WHERE proposal_id = p.id
+                 )
+                WHERE p.source_run_id = ?
+                   OR latest.event_type IN ('PROPOSED', 'APPROVED')
+                ORDER BY p.created_at DESC LIMIT 6
+                """,
+                (run_id,),
+            ).fetchall()
+            lineage = connection.execute(
+                "SELECT policy_hash FROM forecast_cohorts WHERE run_id = ? LIMIT 1",
+                (run_id,),
+            ).fetchone()
             cohort_count = connection.execute(
-                "SELECT COUNT(*) FROM forecast_cohorts WHERE is_canonical = 1",
+                """
+                SELECT COUNT(*) FROM forecast_cohorts
+                WHERE is_canonical = 1 AND policy_hash = ?
+                  AND EXISTS (
+                    SELECT 1 FROM runs r WHERE r.id = forecast_cohorts.run_id
+                      AND r.status = 'succeeded' AND r.workflow_complete = 1
+                  )
+                """,
+                (lineage["policy_hash"] if lineage else "",),
             ).fetchone()[0]
             outcome_count = connection.execute(
-                "SELECT COUNT(*) FROM forecast_outcomes WHERE status = 'priced'",
+                """
+                SELECT COUNT(*) FROM forecast_outcomes o
+                JOIN forecast_cohorts c
+                  ON c.run_id = o.cohort_run_id AND c.narrative_id = o.narrative_id
+                WHERE o.status = 'priced' AND c.policy_hash = ?
+                """,
+                (lineage["policy_hash"] if lineage else "",),
             ).fetchone()[0]
+            portfolio = None
+            portfolio_cash = 0.0
+            positions = []
+            paper_fill_count = 0
+            if paper_decision:
+                portfolio = connection.execute(
+                    "SELECT * FROM paper_portfolios WHERE policy_hash = ?",
+                    (paper_decision["policy_hash"],),
+                ).fetchone()
+            if portfolio:
+                portfolio_cash = float(
+                    connection.execute(
+                        """
+                        SELECT COALESCE(SUM(amount_usd), 0)
+                        FROM portfolio_cash_ledger WHERE portfolio_id = ?
+                        """,
+                        (portfolio["id"],),
+                    ).fetchone()[0]
+                )
+                positions = connection.execute(
+                    "SELECT * FROM paper_positions WHERE portfolio_id = ? ORDER BY opened_at",
+                    (portfolio["id"],),
+                ).fetchall()
+                paper_fill_count = int(
+                    connection.execute(
+                        """
+                        SELECT COUNT(*) FROM paper_fills f
+                        JOIN trade_proposals p ON p.id = f.proposal_id
+                        WHERE p.portfolio_id = ?
+                        """,
+                        (portfolio["id"],),
+                    ).fetchone()[0]
+                )
             run_history = connection.execute(
                 """
                 SELECT id, as_of, mode, status, started_at, completed_at, error
@@ -1446,7 +2760,7 @@ class Database:
                 FROM runs r
                 JOIN landscape_narratives n ON n.run_id = r.id
                 WHERE substr(r.as_of, 1, 10) < substr(?, 1, 10)
-                  AND r.status = 'succeeded' AND r.mode = ?
+                  AND r.status = 'succeeded' AND r.workflow_complete = 1 AND r.mode = ?
                 GROUP BY r.id
                 ORDER BY r.started_at DESC
                 LIMIT 1
@@ -1481,7 +2795,14 @@ class Database:
             "dynamic_research": dict(dynamic_research) if dynamic_research else None,
             "dynamic_memberships": [dict(row) for row in dynamic_memberships],
             "social_metrics": [dict(row) for row in social],
+            "provider_fetch": dict(provider_fetch),
             "paper_decision": dict(paper_decision) if paper_decision else None,
+            "paper_candidates": [dict(row) for row in paper_candidates],
+            "paper_proposals": [dict(row) for row in paper_proposals],
+            "paper_portfolio": dict(portfolio) if portfolio else None,
+            "paper_cash_usd": portfolio_cash,
+            "paper_positions": [dict(row) for row in positions],
+            "paper_fill_count": paper_fill_count,
             "forecast_cohort_count": int(cohort_count),
             "forecast_outcome_count": int(outcome_count),
             "run_history": [dict(row) for row in run_history],

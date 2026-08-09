@@ -34,6 +34,10 @@ NEGATIVE_WORDS = {
     "vulnerability",
 }
 
+# Raw-post provenance/retention is not yet implemented. Keep the network path
+# fail-closed so aggregate bot/sentiment diagnostics cannot become unauditable.
+X_AUDITABLE_COLLECTION_ENABLED = False
+
 
 @dataclass(frozen=True, slots=True)
 class SocialTarget:
@@ -65,6 +69,15 @@ def collect_social_metrics(
                 target,
                 "X collection is disabled; set TRADER_PETE_X_ENABLED=true only after "
                 "approving API spend.",
+            )
+            for target in selected
+        ]
+    if not X_AUDITABLE_COLLECTION_ENABLED:
+        return [
+            _unavailable(
+                target,
+                "X sampling is intentionally unavailable until sanitized raw-post and request "
+                "manifests can be persisted under the platform retention terms.",
             )
             for target in selected
         ]
