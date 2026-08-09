@@ -1,40 +1,50 @@
 # Trader Pete
 
-Trader Pete is a narrative-first crypto research system for four-week paper-trading ideas. It runs a bounded daily workflow, preserves its evidence in SQLite, and renders one concise local HTML dashboard. It does **not** place trades.
+Trader Pete is a stable-narrative crypto research system for four-week paper-trading ideas. It runs
+once, preserves an immutable evidence ledger in SQLite, and renders one local morning dashboard. It
+does **not** place trades.
 
 ## Current state
 
-Phase 1 is operational:
+Phase 1 now runs end to end:
 
-1. Collect point-in-time CoinGecko market, category, and trending-search data.
-2. Enrich trending coins outside the top-250 market-cap universe.
-3. Collect the top DefiLlama protocols by TVL.
-4. Build a quality-screened discovery universe from search trends, price acceleration, BTC-relative momentum, turnover, categories, and protocol growth.
-5. Use OpenAI web research to discover up to six event-led, market-led, or fundamental-led candidates.
-6. Deterministically normalize, verify, score, and retain all candidates while marking at most three as the shortlist.
-7. Store the immutable run and render a self-contained report.
+1. Track the same 14 broad narratives every day from a versioned registry.
+2. Collect CoinGecko market/category data plus direct coverage of every registry and trending asset.
+3. Collect DefiLlama TVL, fees, revenue, and DEX-volume snapshots on the free API surface.
+4. Rank projects inside each narrative by BTC-relative momentum, acceleration, liquidity, activity
+   growth, breadth, attention, and overheating risk.
+5. Rank narrative states deterministically as `leading`, `building`, `active`, `cooling`, or
+   `dormant`; at most three can become daily research focuses, and the maximum is not a quota.
+6. Use bounded OpenAI web research only for root events, narrative context, and project credibility.
+7. Store every input and output and render the self-contained morning report.
 
-The dashboard is research-only and always displays `NO ACTION`. Project selection, paper positions, and human-confirmed execution belong to later phases.
+The daily model cannot create or rename narratives, change scores, add unknown projects, or recommend
+a trade. Registry changes are deliberate code changes, not daily model output.
 
-## Architecture
+## Pipeline
 
 ```text
-CoinGecko + DefiLlama
-        ↓
-immutable raw + normalized snapshots
-        ↓
-quality screens + diversified discovery features
-        ↓
-OpenAI candidate/event/source research
-        ↓
-deterministic evidence, market, breadth, and risk scoring
-        ↓
-SQLite ledger → one-page HTML dashboard
+stable narrative registry
+          +
+CoinGecko market/search data + DefiLlama TVL/fees/revenue/DEX volume
+          ↓
+deterministic project metrics, quality gates, and rankings
+          ↓
+stable narrative states, breadth, confidence, and focus gates
+          ↓
+bounded OpenAI root-event and project-credibility research
+          ↓
+immutable SQLite ledger → one-page local morning dashboard
 ```
 
-The model discovers claims, causal mechanisms, projects, catalysts, and counter-evidence. Python owns URL normalization, source-root deduplication, market and breadth calculations, evidence weighting, scale normalization, lifecycle gates, and ranking.
+The separation is intentional:
 
-## Setup
+- Python owns taxonomy, membership, calculations, data-quality gates, scores, and ranking.
+- The model investigates causes, catalysts, teams, shipped products, counter-evidence, and source
+  provenance.
+- The dashboard keeps measurements, research judgments, and known unknowns visibly separate.
+
+## Setup and use
 
 ```powershell
 python -m venv .venv
@@ -43,7 +53,8 @@ python -m pip install -e ".[dev]"
 Copy-Item .env.example .env
 ```
 
-Add `OPENAI_API_KEY` and `COINGECKO_DEMO_API_KEY` to `.env`. The free CoinGecko Demo plan supports the endpoints used here; a paid plan is not required for one daily run. DefiLlama currently needs no key.
+Add `OPENAI_API_KEY` and `COINGECKO_DEMO_API_KEY` to `.env`. The CoinGecko Demo plan is sufficient for
+one daily run; DefiLlama needs no key for the endpoints currently used.
 
 ```powershell
 trader-pete doctor
@@ -52,65 +63,83 @@ trader-pete run-daily --offline
 trader-pete run-daily
 ```
 
-- `doctor` shows only non-secret settings and credential-presence flags.
-- Offline mode uses fixed fixtures and makes no network calls.
-- Live mode performs provider collection and OpenAI web research; the expanded research pass can take several minutes.
-- Each command runs once and exits, so Windows Task Scheduler can invoke it later.
+- Offline mode is deterministic and makes no network calls.
+- Live mode collects providers and performs the bounded web-research pass.
+- Each command runs once and exits, so Windows Task Scheduler can call it daily.
+- Reports are written to `reports/YYYY-MM-DD/<run-id>.html`.
 
-## What the dashboard means
+## What the dashboard answers
 
-The report separates three ideas that must not be conflated:
+The first view is designed for a morning check:
 
-- **Discovery:** search popularity, new events, unusual price/turnover, and protocol growth find possible themes.
-- **Confirmation:** constituent BTC-relative returns, acceleration, breadth, and mapped protocol metrics test whether a theme is moving broadly.
-- **Trust and risk:** canonical source roots, publisher breadth, primary evidence, recency, contradictions, crowding, and constituent concentration control confidence.
+- BTC regime, broad market breadth, focus count, metric coverage, and freshness.
+- Up to five verified root events and which stable narratives they affect.
+- All 14 narratives ranked with state, seven-day performance, BTC excess return, breadth,
+  fundamental growth, attention, coverage, and prior-run delta.
+- Projects inside the focus narratives with price acceleration, cap/turnover, TVL growth, fee and
+  revenue growth, DEX-volume growth, overheating risk, and an evidence-backed quality review.
 
-CoinGecko trending is explicitly treated as search popularity, not organic sentiment. Syndicated links with the same root count once. Social or aggregator-only evidence cannot verify a candidate. Signals missing from the snapshot are shown as unavailable or reduce confidence; they are not silently replaced by invented precision.
+CoinGecko trending is explicitly search popularity, not sentiment; this follows the endpoint's own
+[24-hour search-trend definition](https://docs.coingecko.com/reference/trending-search). TVL is not
+treated as net inflow because DefiLlama distinguishes those concepts in its
+[data definitions](https://docs.llama.fi/analysts/data-definitions).
 
-One- or two-project themes remain `seed`/`nascent` candidates. A narrative needs at least three measured constituents and sufficient evidence/confirmation before it can become `emerging` or `accelerating`.
+## Score v3
 
-## Opportunity score v2
-
-Available components are reweighted when a measured family is missing:
+Project score uses available components and reweights when a family is absent:
 
 ```text
-12% attention acceleration (research-assessed; capped without trending confirmation)
- 8% attention authenticity
-11% novelty
-14% catalyst strength (capped when evidence is stale or unverified)
-14% BTC-relative market confirmation
-11% weekly price acceleration
-10% constituent breadth
-10% protocol fundamental confirmation
-10% evidence quality
-
-minus 12% crowding-risk penalty
-minus  8% constituent-concentration penalty
+38% BTC-relative momentum and weekly acceleration
+34% base-size-adjusted growth in TVL, fees, revenue, and DEX volume
+18% liquidity quality
+10% measured search attention
+minus 22% of the overheating-risk score
 ```
 
-These weights are transparent hypotheses, not a trained prediction model. They must earn trust through prospective 28-day evaluation before influencing capital.
+Narrative score aggregates the top eligible project signals, breadth versus Bitcoin, fundamental
+growth, and measured attention. A high score cannot become `leading` or `building` without at least
+three measured projects. Focus additionally requires score, confidence, state, and coverage gates.
 
-## Data integrity
+Small-base growth is shrunk toward neutral instead of being treated like mature economic activity.
+Market snapshots older than 48 hours are excluded. These are transparent hypotheses, not trained
+forecasts; they require prospective 28-day validation before they should influence capital.
+
+## Evidence and sentiment policy
+
+- Root URLs are canonicalized so syndicated copies do not become fake corroboration.
+- Primary records, filings, governance, repositories, onchain evidence, and original reporting are
+  preferred.
+- A project cannot remain `credible` without verified source coverage.
+- Social enthusiasm, CoinGecko trends, and price performance cannot prove project seriousness.
+- Organic X sentiment, bot coordination, and AI-authored-news detection remain explicitly unknown
+  until an auditable raw social feed exists.
+- DefiLlama's free surface supplies TVL, fees, revenue, and volume; deeper data such as active users
+  requires another provider or paid access. See the official [API SDK](https://github.com/DefiLlama/api-sdk)
+  and [plan comparison](https://docs.llama.fi/pro-api).
+
+## Ledger and integrity
 
 - Database: `data/trader_pete.db`
-- Report: `reports/YYYY-MM-DD/<run-id>.html`
-- Every provider payload and artifact has a SHA-256 hash.
-- Same-day runs never overwrite prior run artifacts.
-- SQLite schema migrations are additive; historical snapshots are not rewritten.
-- Failed runs remain visible in the run ledger.
-- Credentials, databases, provider payloads, and reports are ignored by Git.
-
-CoinGecko category changes are only discovery hints and are screened for missing, tiny, illiquid, and extreme rows. DefiLlama TVL changes are not treated as net flows because TVL also moves with underlying asset prices; [DefiLlama defines USD inflows separately](https://docs.llama.fi/analysts/data-definitions).
+- Raw provider payloads, normalized snapshots, quantitative landscape, model research, and report
+  artifacts are stored separately.
+- Provider payloads and HTML artifacts have SHA-256 hashes.
+- Same-day runs never overwrite earlier reports.
+- Schema migrations are additive; historical runs are not rewritten.
+- Previous-run deltas compare only runs in the same mode.
+- Credentials, reports, databases, and provider payloads are ignored by Git.
 
 ## Next phase
 
-The next implementation phase should add:
+1. Accumulate stable daily history and measure 1/7/14/28-day narrative and project outcomes against
+   Bitcoin and simple baselines.
+2. Add an immutable raw event/claim ledger with first-seen time, content hash, near-duplicate cluster,
+   root provenance, and contradiction tracking.
+3. Add token unlocks, value capture, venue/spread depth, holder concentration, and drawdown features.
+4. Add reliable users/transactions/flows from suitable free or paid sources.
+5. Add paper entries and exits behind an explicit human-confirmation boundary.
 
-1. An immutable raw-news/claim/event ledger with first-seen timestamps, content hashes, near-duplicate clustering, provenance roots, and contradiction tracking.
-2. Daily narrative history with frozen point-in-time membership, 1/7/14/28-day capped basket returns, BTC excess return, breadth, drawdown, and constituent churn.
-3. Fees, revenue, users, and flow-adjusted protocol features instead of TVL alone.
-4. Project-level token value capture, liquidity, unlocks, venue availability, and downside analysis.
-5. Paper entries and exits behind a human-confirmation boundary.
+An xLSTM or other time-series model should wait until this prospective ledger is large enough to beat
+simple momentum and breadth baselines out of sample.
 
 ## Development
 
@@ -120,4 +149,5 @@ ruff format --check .
 pytest
 ```
 
-This is experimental research software, not financial advice. Crypto assets can lose most or all of their value.
+This is experimental research software, not financial advice. Crypto assets can lose most or all of
+their value.
