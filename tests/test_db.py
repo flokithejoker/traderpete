@@ -44,3 +44,28 @@ def test_provider_payload_is_content_hashed(tmp_path: Path) -> None:
 
     assert row is not None
     assert len(row["payload_hash"]) == 64
+
+
+def test_initialize_migrates_existing_phase_one_tables(tmp_path: Path) -> None:
+    database = Database(tmp_path / "test.db")
+    with database.connect() as connection:
+        connection.execute("CREATE TABLE category_snapshots (category_id TEXT)")
+        connection.execute("CREATE TABLE narrative_assessments (narrative_id TEXT)")
+        connection.execute("CREATE TABLE research_sources (title TEXT)")
+
+    database.initialize()
+
+    with database.connect() as connection:
+        category_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(category_snapshots)")
+        }
+        narrative_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(narrative_assessments)")
+        }
+        source_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(research_sources)")
+        }
+
+    assert "top_asset_ids_json" in category_columns
+    assert "metric_coverage_json" in narrative_columns
+    assert {"publisher", "root_url", "claim", "is_primary"} <= source_columns

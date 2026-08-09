@@ -17,6 +17,7 @@ from trader_pete.models import (
     ProtocolMetric,
     RunMode,
     RunStatus,
+    TrendingAsset,
 )
 
 SCHEMA = """
@@ -70,6 +71,7 @@ CREATE TABLE IF NOT EXISTS category_snapshots (
     market_cap_usd REAL,
     volume_24h_usd REAL,
     change_24h_pct REAL,
+    top_asset_ids_json TEXT NOT NULL DEFAULT '[]',
     PRIMARY KEY (run_id, category_id)
 );
 
@@ -87,6 +89,17 @@ CREATE TABLE IF NOT EXISTS protocol_snapshots (
     PRIMARY KEY (run_id, protocol_id)
 );
 
+CREATE TABLE IF NOT EXISTS trending_snapshots (
+    run_id TEXT NOT NULL REFERENCES runs(id),
+    asset_id TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    name TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    search_rank INTEGER NOT NULL,
+    market_cap_rank INTEGER,
+    PRIMARY KEY (run_id, asset_id)
+);
+
 CREATE TABLE IF NOT EXISTS narrative_assessments (
     run_id TEXT NOT NULL REFERENCES runs(id),
     narrative_id TEXT NOT NULL,
@@ -95,7 +108,10 @@ CREATE TABLE IF NOT EXISTS narrative_assessments (
     lifecycle TEXT NOT NULL,
     opportunity_score REAL NOT NULL,
     confidence_score REAL NOT NULL,
+    is_shortlisted INTEGER NOT NULL DEFAULT 0,
     signals_json TEXT NOT NULL,
+    protocol_ids_json TEXT NOT NULL DEFAULT '[]',
+    metric_coverage_json TEXT NOT NULL DEFAULT '{}',
     thesis TEXT NOT NULL,
     counter_thesis TEXT NOT NULL,
     PRIMARY KEY (run_id, narrative_id)
@@ -119,6 +135,10 @@ CREATE TABLE IF NOT EXISTS research_sources (
     url TEXT NOT NULL,
     published_at TEXT,
     source_type TEXT NOT NULL,
+    publisher TEXT NOT NULL DEFAULT '',
+    root_url TEXT NOT NULL DEFAULT '',
+    claim TEXT NOT NULL DEFAULT '',
+    is_primary INTEGER NOT NULL DEFAULT 0,
     supports INTEGER NOT NULL,
     credibility REAL NOT NULL,
     FOREIGN KEY (run_id, narrative_id)
@@ -176,6 +196,32 @@ class Database:
     def initialize(self) -> None:
         with self.connect() as connection:
             connection.executescript(SCHEMA)
+            self._migrate(connection)
+
+    @staticmethod
+    def _migrate(connection: sqlite3.Connection) -> None:
+        additions = {
+            "category_snapshots": {
+                "top_asset_ids_json": "TEXT NOT NULL DEFAULT '[]'",
+            },
+            "narrative_assessments": {
+                "is_shortlisted": "INTEGER NOT NULL DEFAULT 0",
+                "protocol_ids_json": "TEXT NOT NULL DEFAULT '[]'",
+                "metric_coverage_json": "TEXT NOT NULL DEFAULT '{}'",
+            },
+            "research_sources": {
+                "publisher": "TEXT NOT NULL DEFAULT ''",
+                "root_url": "TEXT NOT NULL DEFAULT ''",
+                "claim": "TEXT NOT NULL DEFAULT ''",
+                "is_primary": "INTEGER NOT NULL DEFAULT 0",
+            },
+        }
+        for table, columns in additions.items():
+            existing = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})")}
+            for column, definition in columns.items():
+                if column not in existing:
+                    connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        connection.execute("PRAGMA user_version = 2")
 
     def create_run(self, *, as_of: datetime, mode: RunMode, config: dict[str, object]) -> str:
         run_id = f"{as_of.strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
@@ -273,9 +319,9 @@ class Database:
                     """
                     INSERT INTO narrative_assessments (
                         run_id, narrative_id, name, summary, lifecycle,
-                        opportunity_score, confidence_score, signals_json,
-                        thesis, counter_thesis
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        opportunity_score, confidence_score, is_shortlisted, signals_json,
+                        protocol_ids_json, metric_coverage_json, thesis, counter_thesis
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         run_id,
@@ -285,7 +331,10 @@ class Database:
                         narrative.lifecycle.value,
                         narrative.opportunity_score,
                         narrative.confidence_score,
+                        int(narrative.is_shortlisted),
                         narrative.signals.model_dump_json(),
+                        canonical_json(narrative.protocol_ids),
+                        canonical_json(narrative.metric_coverage),
                         narrative.thesis,
                         narrative.counter_thesis,
                     ),
@@ -305,8 +354,9 @@ class Database:
                     """
                     INSERT INTO research_sources (
                         run_id, narrative_id, title, url, published_at,
-                        source_type, supports, credibility
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        source_type, publisher, root_url, claim, is_primary,
+                        supports, credibility
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     [
                         (
@@ -316,6 +366,10 @@ class Database:
                             str(source.url),
                             source.published_at.isoformat() if source.published_at else None,
                             source.source_type,
+                            source.publisher,
+                            source.root_url,
+                            source.claim,
+                            int(source.is_primary),
                             int(source.supports),
                             source.credibility,
                         )
@@ -358,8 +412,8 @@ class Database:
                 """
                 INSERT INTO category_snapshots (
                     run_id, category_id, name, observed_at, market_cap_usd,
-                    volume_24h_usd, change_24h_pct
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    volume_24h_usd, change_24h_pct, top_asset_ids_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -370,6 +424,7 @@ class Database:
                         category.market_cap_usd,
                         category.volume_24h_usd,
                         category.change_24h_pct,
+                        canonical_json(category.top_asset_ids),
                     )
                     for category in categories
                 ],
@@ -401,6 +456,28 @@ class Database:
                 ],
             )
 
+    def store_trending_assets(self, run_id: str, assets: list[TrendingAsset]) -> None:
+        with self.connect() as connection:
+            connection.executemany(
+                """
+                INSERT INTO trending_snapshots (
+                    run_id, asset_id, symbol, name, observed_at, search_rank, market_cap_rank
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        run_id,
+                        asset.asset_id,
+                        asset.symbol,
+                        asset.name,
+                        asset.observed_at.astimezone(UTC).isoformat(),
+                        asset.search_rank,
+                        asset.market_cap_rank,
+                    )
+                    for asset in assets
+                ],
+            )
+
     def store_market_bundle(
         self,
         *,
@@ -408,10 +485,12 @@ class Database:
         assets: list[MarketAsset],
         categories: list[CategoryMarket],
         protocols: list[ProtocolMetric],
+        trending_assets: list[TrendingAsset] | None = None,
     ) -> None:
         self.store_market_assets(run_id, assets)
         self.store_categories(run_id, categories)
         self.store_protocols(run_id, protocols)
+        self.store_trending_assets(run_id, trending_assets or [])
 
     def store_dashboard_artifact(self, run_id: str, path: Path, sha256: str) -> None:
         with self.connect() as connection:
@@ -419,10 +498,6 @@ class Database:
                 """
                 INSERT INTO dashboard_artifacts (run_id, path, sha256, created_at)
                 VALUES (?, ?, ?, ?)
-                ON CONFLICT(run_id) DO UPDATE SET
-                    path = excluded.path,
-                    sha256 = excluded.sha256,
-                    created_at = excluded.created_at
                 """,
                 (run_id, str(path), sha256, datetime.now(UTC).isoformat()),
             )
@@ -480,6 +555,18 @@ class Database:
                 """,
                 (run_id,),
             ).fetchall()
+            trending = connection.execute(
+                """
+                SELECT * FROM trending_snapshots WHERE run_id = ? ORDER BY search_rank
+                """,
+                (run_id,),
+            ).fetchall()
+            run_history = connection.execute(
+                """
+                SELECT id, as_of, mode, status, started_at, completed_at, error
+                FROM runs ORDER BY started_at DESC LIMIT 8
+                """
+            ).fetchall()
 
         return {
             "run": dict(run),
@@ -490,4 +577,6 @@ class Database:
             "narratives": [dict(row) for row in narratives],
             "memberships": [dict(row) for row in memberships],
             "sources": [dict(row) for row in sources],
+            "trending": [dict(row) for row in trending],
+            "run_history": [dict(row) for row in run_history],
         }

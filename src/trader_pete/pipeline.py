@@ -36,6 +36,7 @@ def run_daily(settings: Settings, mode: RunMode) -> DailyRunResult:
             assets=bundle.assets,
             categories=bundle.categories,
             protocols=bundle.protocols,
+            trending_assets=bundle.trending_assets,
         )
         output = NarrativeResearcher(settings).research(
             bundle,
@@ -50,10 +51,10 @@ def run_daily(settings: Settings, mode: RunMode) -> DailyRunResult:
             prompt=output.prompt,
             response_id=output.response_id,
         )
+        database.finish_run(run_id, RunStatus.SUCCEEDED)
         renderer = DashboardRenderer(database=database, reports_dir=settings.reports_dir)
         artifact = renderer.render(run_id)
         database.store_dashboard_artifact(run_id, artifact.path, artifact.sha256)
-        database.finish_run(run_id, RunStatus.SUCCEEDED)
         return DailyRunResult(run_id=run_id, report_path=artifact.path)
     except Exception as error:
         database.finish_run(run_id, RunStatus.FAILED, error=str(error))

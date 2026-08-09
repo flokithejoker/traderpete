@@ -1,3 +1,4 @@
+import hashlib
 from dataclasses import replace
 from pathlib import Path
 
@@ -24,6 +25,8 @@ def test_offline_pipeline_writes_ledger_and_self_contained_report(tmp_path: Path
     assert "NO ACTION" in html
     assert "OPENAI_API_KEY" not in html
     assert "https://cdn" not in html
+    assert result.run_id in str(result.report_path)
+    assert result.report_path.parent.name.replace("-", "") == result.run_id[:8]
 
     with Database(settings.db_path).connect() as connection:
         run = connection.execute(
@@ -34,4 +37,20 @@ def test_offline_pipeline_writes_ledger_and_self_contained_report(tmp_path: Path
         ).fetchone()
 
     assert run["status"] == "succeeded"
-    assert len(artifact["sha256"]) == 64
+    assert artifact["sha256"] == hashlib.sha256(result.report_path.read_bytes()).hexdigest()
+
+
+def test_same_day_runs_create_distinct_immutable_reports(tmp_path: Path) -> None:
+    base = Settings.from_env(Path.cwd())
+    settings = replace(
+        base,
+        db_path=tmp_path / "data" / "test.db",
+        reports_dir=tmp_path / "reports",
+    )
+
+    first = run_daily(settings, RunMode.OFFLINE)
+    second = run_daily(settings, RunMode.OFFLINE)
+
+    assert first.report_path != second.report_path
+    assert first.report_path.exists()
+    assert second.report_path.exists()

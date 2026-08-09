@@ -13,8 +13,8 @@ data/*.db
 data/*.db-*
 data/raw/
 reports/*.html
+reports/**/*.html
 
 # Keep directories in fresh clones.
 !data/.gitkeep
 !reports/.gitkeep
-
