@@ -25,6 +25,8 @@ deterministic identity, independent-underlying breadth, persistence, and promoti
                                 ↓
 bounded event and structured project-diligence research
                                 ↓
+falsifiable four-week investment case + immediate shadow classification
+                                ↓
 contract/supply/security + executable venue + technical entry gates
                                 ↓
 immutable ledger → one-page dashboard → paper proposal → human approval → simulated fill
@@ -64,13 +66,16 @@ estimates.
 
 Project research separates opportunity from seriousness and investability. Quality reviews cover:
 
+- the explicit project-to-narrative and token-demand mechanism;
 - team identity and independently confirmed backing;
-- shipped product, measured adoption/economics, and engineering delivery;
+- shipped product and measured growth in adoption/economics, not current size alone;
 - security/governance, community quality, token value capture, and quantified 35-day unlocks;
-- explicit unknowns, red flags, catalyst, and counter-thesis.
+- a sourced catalyst inside 28 days, a causal thesis, risks, and observable invalidation conditions.
 
-The live pass fully researches one top eligible project per day. This keeps the packet auditable,
-prevents context dilution, and bounds daily model context and cost.
+The live pass fully researches one top eligible project per day. Its project must belong to a
+narrative confirmed by at least two deterministic discovery lanes and two independent evidence
+roots. This keeps the packet auditable, prevents context dilution, and bounds daily model context
+and cost.
 
 Each non-unknown quality dimension must link to a retrieved source already present in the review.
 Unlock readiness additionally requires a dated schedule, amount, and percentage of circulating
@@ -78,7 +83,7 @@ supply; prose about tokenomics or FDV is not an unlock measurement.
 Unknown dimensions remain missing rather than becoming zero; a seriousness score appears only when
 at least half the dimensions are covered.
 
-X support is intentionally unavailable in `paper-v2`. The prototype aggregation path stays
+X support is intentionally unavailable in `paper-v3`. The prototype aggregation path stays
 fail-closed until sanitized raw-post IDs/content hashes, query manifests, response metadata, and
 retention compliance can be stored with every diagnostic. This prevents an unreproducible sentiment
 number from influencing research.
@@ -125,15 +130,17 @@ social sentiment.
 
 The morning view shows, in process order:
 
-1. BTC regime, market breadth, dynamic-radar count, social coverage, paper status, and data age.
+1. BTC regime, market breadth, dynamic-radar count, social coverage, case status, and data age.
 2. Root events and dated catalysts.
-3. Dynamic narrative radar with lifecycle, persistence, BTC excess, breadth, fundamentals, search,
+3. Investment case board with case stage, deterministic score components, evidence coverage,
+   catalyst, strengths, risks, invalidation, and the next gap.
+4. Dynamic narrative radar with lifecycle, persistence, BTC excess, breadth, fundamentals, search,
    social coverage, evidence roots, rejection reasons, and resolved projects.
-4. Stable market map for broad coverage.
-5. Project explorer with measured growth and structured seriousness evidence.
-6. Paper gate board: official identity binding, security, quantified supply/unlocks, value capture,
+5. Stable market map for broad coverage.
+6. Project explorer with measured growth and structured seriousness evidence.
+7. Paper gate board: official identity binding, security, quantified supply/unlocks, value capture,
    technical entry, deterministic size, and first blocker.
-7. Proposal/portfolio ledger, social diagnostics, known limits, and run ledger.
+8. Proposal/portfolio ledger, social diagnostics, known limits, and run ledger.
 
 CoinGecko trending is explicitly search popularity under the endpoint's
 [24-hour trend definition](https://docs.coingecko.com/reference/trending-search). TVL is not treated
@@ -149,8 +156,15 @@ approvals and fills. Later reruns remain diagnostic and cannot add a new candida
 freeze signal-time reference prices for 7/28-day hypothesis
 measurement. Those outcomes never mix with approved, costed paper-portfolio performance.
 
-The content-hashed `paper-v2` policy requires 30 consecutive canonical live days and every mandatory
-gate to pass. `UNKNOWN` blocks a proposal. Current evidence adapters include exact CoinGecko
+The content-hashed `paper-v3` policy separates early testing from strategy validation:
+
+- day one can show a developing or early-lead case and persist it for prospective comparison;
+- a completely evidenced setup can become a shadow-ready case immediately;
+- a paper proposal needs two consecutive canonical live days, an `emerging` or `accelerating`
+  narrative, a worthy case score/coverage, and every mandatory execution gate;
+- 30 canonical days remains the first strategy-evaluation target, not an entry lock.
+
+`UNKNOWN` blocks a paper proposal. Current evidence adapters include exact CoinGecko
 identity/supply, 30-day OHLC, CoinGecko-linked Kraken listing identity, Kraken L2 book walking,
 contract-matched DEX Screener pools, GoPlus screening, and optional Etherscan source/proxy metadata.
 CoinGecko resolution is labelled provider-resolved, not officially verified. Etherscan metadata is
@@ -187,9 +201,10 @@ execution-ledger increment. There is deliberately no live trading or exchange-se
 - Schema changes are additive and historical narrative membership is never rewritten.
 - Credentials, databases, provider payloads, reports, and generated output are ignored by Git.
 
-Phase 1 is operational but not statistically validated. A stable Phase 1 requires 30 consecutive
-point-in-time days, seven unattended scheduled runs, source/data freshness checks, and prospective
-comparison with BTC and simple momentum baselines.
+The system is operational but not statistically validated. Cases are usable for immediate shadow
+observation; 30 consecutive point-in-time days, seven unattended scheduled runs, freshness checks,
+and prospective BTC/simple-momentum comparisons are still required before treating the strategy as
+validated.
 
 ## Development
 
