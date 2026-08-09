@@ -36,6 +36,8 @@ Copy-Item .env.example .env
 
 Add `OPENAI_API_KEY` and a CoinGecko Demo or Pro key to `.env`. Keys are read only from the environment and are never stored in the database or report.
 
+The free CoinGecko Demo plan covers the Phase 1 market and category endpoints; a paid plan is not required for one daily run. Pro support remains available through `COINGECKO_PRO_API_KEY`.
+
 ## Commands
 
 ```powershell

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class FrozenModel(BaseModel):
@@ -32,11 +32,18 @@ class NarrativeLifecycle(StrEnum):
 
 class EvidenceSource(FrozenModel):
     title: str
-    url: HttpUrl
+    url: str
     published_at: datetime | None = None
     source_type: str = "web"
     supports: bool = True
     credibility: float = Field(ge=0, le=1)
+
+    @field_validator("url")
+    @classmethod
+    def validate_http_url(cls, value: str) -> str:
+        if not value.startswith(("https://", "http://")):
+            raise ValueError("Source URL must use http or https.")
+        return value
 
 
 class NarrativeSignals(FrozenModel):

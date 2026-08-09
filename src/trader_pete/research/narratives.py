@@ -112,7 +112,7 @@ class NarrativeResearcher:
             store=False,
             max_tool_calls=8,
             max_output_tokens=8_000,
-            verbosity="low",
+            text={"verbosity": "low"},
         )
         if response.output_parsed is None:
             raise RuntimeError("OpenAI returned no structured narrative research result.")

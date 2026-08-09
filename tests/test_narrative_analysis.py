@@ -5,6 +5,7 @@ from trader_pete.analysis import build_research_context, score_signals
 from trader_pete.config import Settings
 from trader_pete.models import (
     DailyResearchDraft,
+    EvidenceSource,
     NarrativeResearchDraft,
     NarrativeSignals,
     RunMode,
@@ -33,6 +34,15 @@ def test_signal_score_is_deterministic_and_penalizes_crowding() -> None:
 
     assert base == 64.8
     assert crowded == 58.8
+
+
+def test_evidence_source_rejects_non_http_urls() -> None:
+    try:
+        EvidenceSource(title="Unsafe", url="javascript:alert(1)", credibility=0.5)
+    except ValueError as error:
+        assert "http or https" in str(error)
+    else:
+        raise AssertionError("Unsafe source URL was accepted")
 
 
 def test_context_is_bounded_and_excludes_raw_payloads(tmp_path: Path) -> None:
@@ -98,4 +108,6 @@ def test_live_research_is_stateless_structured_and_web_enabled(tmp_path: Path, m
     assert client.kwargs["reasoning"]["context"] == "current_turn"
     assert client.kwargs["text_format"] is DailyResearchDraft
     assert client.kwargs["tools"][0]["type"] == "web_search"
+    assert client.kwargs["text"] == {"verbosity": "low"}
+    assert "verbosity" not in client.kwargs
     assert output.result.narratives[0].constituent_ids == ["bitcoin"]
